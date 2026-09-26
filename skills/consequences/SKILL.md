@@ -1,0 +1,56 @@
+---
+name: consequences
+description: Analyze the consequences of a code change in a web app. Use when the user asks what a change affects, what it could break, which screens or flows it touches, or asks to "analyze the consequences of this change" / "analizá las consecuencias de este cambio". Produces a navigable map with confirmed problems (with reproduction steps), behavior differences, and unexplored areas.
+---
+
+# Forkfall: consequences of a change
+
+The CLI lives at `../../packages/forkfall/bin/forkfall.js` relative to this skill's base directory. Call it `FORKFALL` below and run it with `node`. It needs Node 22+ and, for exploration, Playwright's Chromium (`npx playwright install chromium` inside `packages/forkfall` if missing).
+
+## 1. Find what the change can reach (static, safe)
+
+Pick the change: the last commit by default (`--base HEAD~1 --head HEAD`), a branch (`--base main`), or uncommitted work (`--head WORKTREE`).
+
+```sh
+node FORKFALL impact <repo> --base <ref> [--head <ref>] --out /tmp/impact.json
+```
+
+Read the output: changed files and symbols, and the screens (`page`) and endpoints (`api`) reachable from them, each with the import chain that explains it. Then read the changed code itself.
+
+## 2. Write targeted scenarios
+
+Think like a tester who knows what changed. List 3–10 short user journeys (2–6 steps) that are most likely to expose a regression: sequences that cross the changed code from a *different* screen, reuse state across screens, edge values (0, negative, empty, very long, repeated submits, back-and-forth navigation). Write them to a JSON file, using the labels users see on screen:
+
+```json
+[
+  { "name": "apply coupon then change quantity", "start": "/cart",
+    "steps": [ { "fill": "Coupon code", "value": "SAVE10" }, { "click": "Apply" },
+               { "fill": "Quantity", "value": "0" }, { "click": "Checkout" }, { "fillAll": true }, { "click": "Place order" } ] }
+]
+```
+
+Step forms: `{ "goto": "/path" }`, `{ "click": "visible label" }`, `{ "fill": "field label", "value": "..." }`, `{ "select": "field label", "value": "option value" }`, `{ "fillAll": true }` (fills every empty field with a valid value). Scenarios are hypotheses: the explorer runs them and reports what really happens.
+
+## 3. Explore both versions
+
+Exploration clicks and submits forms. **Never run it against production data or shared databases.** Before starting, check the app's env files; if they point at a real database or paid API, stop and ask the user for a safe setup (local database, a disposable branch, or a demo mode). Ask for the start command if it isn't obvious from `package.json`.
+
+```sh
+node FORKFALL explore <repo> --base <ref> --head <ref> --start "<command that honors $PORT>" \
+  --scenarios scenarios.json [--reset-path /api/reset] [--env-file .env.local] \
+  [--sequences 40] [--steps 8] [--minutes 5] --lang <user's language: es|en>
+```
+
+It checks out both versions into temporary worktrees, starts them, runs your scenarios and then generated sequences (biased toward the affected screens) on the new version, and replays each sequence on the old one. If the user already runs both versions, pass `--candidate-url` and `--baseline-url` instead of `--start`.
+
+Optional: if `TYPESAFE_API_KEY` is set, every difference is judged by TypeSafe's Jev: is it explained by the change's intent (pass `--intent "..."` with the user's own words when you have them), and does the new screen contradict itself? Suspicious differences are listed first. `node FORKFALL judge <run-dir>` re-judges a finished run without exploring again.
+
+## 4. Report
+
+Open the printed `map.html` path for the user and summarize in their language:
+
+- **Confirmed problems**: only what the explorer saw happen in the new version and not in the old one. Give the reproduction steps exactly as listed.
+- **Suspicious differences** (if Jev ran): lead with these; they are judgments, so say how confident and why they look wrong.
+- **Behavior differences**: say which ones look intended given the change and which look suspicious, and why. You are judging; say so.
+- **Not explored**: affected screens the exploration never reached. Never say "no bugs"; say what was covered.
+- Suggest a follow-up scenario for anything suspicious and offer to run it.

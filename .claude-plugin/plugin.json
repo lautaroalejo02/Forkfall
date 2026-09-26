@@ -1,0 +1,6 @@
+{
+  "name": "forkfall",
+  "version": "0.2.0",
+  "description": "Analyze the consequences of a code change in a web app: which screens it reaches, and which click paths now break or behave differently.",
+  "author": { "name": "Lautaro" }
+}

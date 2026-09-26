@@ -3,9 +3,18 @@
   "version": "0.1.0",
   "description": "Decide on behavior, assumptions and consequences of a change, with captured evidence and approvals that expire.",
   "type": "module",
-  "bin": { "forkfall": "bin/forkfall.js" },
-  "engines": { "node": ">=22" },
-  "scripts": { "test": "node --test" },
+  "bin": {
+    "forkfall": "bin/forkfall.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
   "license": "UNLICENSED",
-  "private": true
+  "private": true,
+  "dependencies": {
+    "playwright": "^1.62.1"
+  }
 }

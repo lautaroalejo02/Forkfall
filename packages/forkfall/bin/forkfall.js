@@ -5,10 +5,19 @@ import { parseArgs } from 'node:util';
 import { loadAnalysis, AnalysisError } from '../lib/analysis.js';
 import { captureCheck, deriveState, recordDecision, ACTIONS } from '../lib/state.js';
 import { renderReport } from '../lib/report.js';
+import { analyzeImpact } from '../lib/impact.js';
+import { renderMap } from '../lib/map.js';
 
 const USAGE = `forkfall — decide on behavior, not diffs
 
 Usage:
+  forkfall impact   <repo> [--base HEAD~1] [--head HEAD|WORKTREE] [--out impact.json]
+  forkfall explore  <repo> --start "<command using $PORT>" [--base HEAD~1] [--head HEAD]
+                    [--reset-path /__reset] [--scenarios file.json] [--sequences 40] [--steps 8]
+                    [--minutes 5] [--seed 1] [--env-file .env] [--lang es|en] [--out-dir dir]
+                    [--intent "what the change is meant to do"]
+                    or, for apps you already run: --candidate-url URL [--baseline-url URL]
+  forkfall judge    <run-dir> [--intent "..."] [--lang es|en]   re-judge a run with Jev (needs TYPESAFE_API_KEY)
   forkfall validate <analysis.json>
   forkfall status   <analysis.json>
   forkfall verify   <analysis.json> [--check <id>] [--yes]
@@ -21,18 +30,105 @@ Usage:
 Exit codes: 0 ok · 1 invalid input, failed check or basis mismatch · 2 usage error · 3 decisions pending or stale (status)
 Actions: ${ACTIONS.join(', ')}`;
 
-function main(argv) {
+async function runExplore(repo, v) {
+  const { explore } = await import('../lib/explore.js');
+  const { startApps } = await import('../lib/apps.js');
+  const base = v.base ?? 'HEAD~1';
+  const head = v.head ?? 'HEAD';
+  const impact = analyzeImpact({ repo, base, head });
+  printImpact(impact);
+  const outDir = v['out-dir'] ?? path.join(repo, '.forkfall', `run-${new Date().toISOString().replace(/[:.]/g, '-')}`);
+  fs.mkdirSync(outDir, { recursive: true });
+
+  let apps = null;
+  let candidateUrl = v['candidate-url'];
+  let baselineUrl = v['baseline-url'];
+  if (!candidateUrl) {
+    if (!v.start) { console.error('explore needs --start "<command>" or --candidate-url'); return 2; }
+    apps = await startApps({ repo, base, head, start: v.start, envFiles: v['env-file'] ?? [], log: (m) => console.log(m) });
+    candidateUrl = apps.candidate.url;
+    baselineUrl = apps.baseline.url;
+  }
+  const pages = impact.entries.filter((e) => e.kind === 'page');
+  let exploration;
+  try {
+    exploration = await explore({
+      candidateUrl, baselineUrl,
+      focusRoutes: pages.map((e) => e.route),
+      startPaths: [...new Set(['/', ...pages.filter((e) => !/\[|:/.test(e.route)).map((e) => e.route)])],
+      scenarios: v.scenarios ? JSON.parse(fs.readFileSync(v.scenarios, 'utf8')) : [],
+      resetPath: v['reset-path'],
+      sequences: Number(v.sequences ?? 40), maxSteps: Number(v.steps ?? 8),
+      timeMs: Number(v.minutes ?? 5) * 60_000, seed: Number(v.seed ?? 1),
+      log: (m) => console.log(m),
+    });
+  } finally {
+    apps?.stop();
+  }
+  if (process.env.TYPESAFE_API_KEY) await judgeRun({ impact, exploration, v, outDir });
+  fs.writeFileSync(path.join(outDir, 'impact.json'), `${JSON.stringify(impact, null, 2)}
+`);
+  fs.writeFileSync(path.join(outDir, 'exploration.json'), `${JSON.stringify(exploration, null, 2)}
+`);
+  const mapFile = path.join(outDir, 'map.html');
+  fs.writeFileSync(mapFile, renderMap({ impact, exploration, lang: v.lang ?? 'en' }));
+  const bad = exploration.findings.filter((f) => !f.preexisting && f.severity >= 2);
+  console.log(`
+${exploration.coverage.sequences} sequences, ${exploration.coverage.distinctStates} states, ${bad.length} confirmed problem(s), ${exploration.findings.filter((f) => !f.preexisting && f.severity === 1).length} difference(s)`);
+  for (const f of bad) console.log(`  [${f.type}] ${f.route}: ${f.detail}
+    ${f.repro.map((s) => s.text).join(' → ')}`);
+  console.log(`map: ${mapFile}`);
+  return bad.length ? 1 : 0;
+}
+
+async function judgeRun({ impact, exploration, v, outDir }) {
+  const apiKey = process.env.TYPESAFE_API_KEY;
+  if (!apiKey) { console.log('(no TYPESAFE_API_KEY: differences are not judged)'); return; }
+  const { judgeFindings } = await import('../lib/judge.js');
+  const usage = await judgeFindings({ exploration, impact, intent: v.intent, apiKey, log: (m) => console.log(m) });
+  exploration.judge = { intent: v.intent ?? impact.message, usage };
+  fs.writeFileSync(path.join(outDir, 'exploration.json'), `${JSON.stringify(exploration, null, 2)}
+`);
+  fs.writeFileSync(path.join(outDir, 'map.html'), renderMap({ impact, exploration, lang: v.lang ?? 'en' }));
+  console.log(`judged ${usage.requests} finding(s) with Jev (${usage.input_tokens} in / ${usage.output_tokens} out tokens)`);
+  for (const f of exploration.findings.filter((x) => x.judgment?.verdict === 'suspicious')) {
+    console.log(`  SUSPICIOUS ${f.route} (explained ${f.judgment.explainedByIntent.toFixed(2)}, inconsistent ${f.judgment.screenInconsistent.toFixed(2)}): ${f.repro.map((s) => s.text).join(' → ')}`);
+  }
+  console.log(`map: ${path.join(outDir, 'map.html')}`);
+}
+
+async function main(argv) {
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
     options: {
-      out: { type: 'string' }, check: { type: 'string' }, yes: { type: 'boolean' },
+      out: { type: 'string' }, base: { type: 'string' }, head: { type: 'string' },
+      start: { type: 'string' }, 'reset-path': { type: 'string' }, scenarios: { type: 'string' },
+      sequences: { type: 'string' }, steps: { type: 'string' }, minutes: { type: 'string' }, seed: { type: 'string' },
+      'env-file': { type: 'string', multiple: true }, lang: { type: 'string' }, 'out-dir': { type: 'string' },
+      'candidate-url': { type: 'string' }, intent: { type: 'string' }, 'baseline-url': { type: 'string' }, check: { type: 'string' }, yes: { type: 'boolean' },
       by: { type: 'string' }, basis: { type: 'string' }, action: { type: 'string' }, note: { type: 'string' }, help: { type: 'boolean', short: 'h' },
     },
   });
   const [cmd, file, ...rest] = positionals;
   if (values.help || !cmd) { console.log(USAGE); return 0; }
   if (!file) { console.error(USAGE); return 2; }
+
+  if (cmd === 'impact') {
+    const result = analyzeImpact({ repo: file, base: values.base ?? 'HEAD~1', head: values.head ?? 'HEAD' });
+    if (values.out) fs.writeFileSync(values.out, `${JSON.stringify(result, null, 2)}
+`);
+    printImpact(result);
+    return 0;
+  }
+
+  if (cmd === 'explore') return runExplore(file, values);
+  if (cmd === 'judge') {
+    const impact = JSON.parse(fs.readFileSync(path.join(file, 'impact.json'), 'utf8'));
+    const exploration = JSON.parse(fs.readFileSync(path.join(file, 'exploration.json'), 'utf8'));
+    await judgeRun({ impact, exploration, v: values, outDir: file });
+    return 0;
+  }
 
   const ctx = loadAnalysis(file);
   ctx.relFile = path.relative(process.cwd(), ctx.file).split(path.sep).join('/');
@@ -100,7 +196,7 @@ function main(argv) {
 }
 
 try {
-  process.exitCode = main(process.argv.slice(2));
+  process.exitCode = await main(process.argv.slice(2));
 } catch (e) {
   if (e instanceof AnalysisError) {
     console.error(`invalid analysis:\n  ${e.errors.join('\n  ')}`);
@@ -109,7 +205,21 @@ try {
     console.error(e.message);
     process.exitCode = 2;
   } else {
-    console.error(e.message);
+    console.error(process.env.FORKFALL_DEBUG ? e.stack : e.message);
+    if (process.env.FORKFALL_DEBUG && e.cause) console.error('cause:', e.cause);
     process.exitCode = 1;
   }
+}
+
+function printImpact(r) {
+  console.log(`${r.message}  (${r.baseCommit.slice(0, 7)}..${r.headCommit?.slice(0, 7) ?? 'worktree'})`);
+  console.log(`graph: ${r.graph.files} files, ${r.graph.edges} imports${r.graph.aliases.length ? `, aliases ${r.graph.aliases.join(' ')}` : ''}`);
+  console.log(`
+changed (${r.changed.length}):`);
+  for (const c of r.changed) console.log(`  ${c.status} ${c.file}${c.symbols.length ? `  [${c.symbols.join(', ')}]` : ''}`);
+  console.log(`
+affected files: ${r.affectedFiles.length}`);
+  console.log(`
+reachable entry points (${r.entries.length}):`);
+  for (const e of r.entries) console.log(`  ${e.kind.padEnd(4)} ${e.route.padEnd(40)} via ${e.chain.join(' > ')}`);
 }
