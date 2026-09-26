@@ -1,0 +1,118 @@
+{
+  "schemaVersion": 1,
+  "analysisId": "permissions-cache-001",
+  "createdAt": "2026-09-26T00:00:00Z",
+  "producer": { "adapter": "manual", "agent": "claude-code", "model": "claude-opus-5-5" },
+  "subject": {
+    "title": "Cache permission checks",
+    "objective": "Cache permission checks to reduce database queries, without letting anyone keep access after a permission is revoked.",
+    "root": "../../examples/permissions-cache"
+  },
+  "scope": {
+    "includedPaths": ["src", "test"],
+    "limitations": [
+      "Only the in-process permission checker was examined. Other services that read permissions were not.",
+      "The store is an in-memory stand-in for the real database; production latency and multi-instance behavior were not tested."
+    ]
+  },
+  "nodes": [
+    {
+      "id": "b-fewer-queries", "type": "behavior", "origin": "agent", "epistemic": "inferred",
+      "title": "Repeated checks don't hit the database",
+      "actor": "the permissions database",
+      "trigger": "the same user asks for the same permission several times within 5 minutes",
+      "outcome": "only the first request queries the database; after 5 minutes it is queried again",
+      "acceptance": ["Two checks within the TTL cause exactly one store query", "A check after the TTL expires queries the store again"]
+    },
+    {
+      "id": "b-revocation", "type": "behavior", "origin": "human", "epistemic": "inferred",
+      "title": "Revoked access ends immediately",
+      "actor": "a user whose permission was just revoked",
+      "trigger": "they try again seconds after the revocation, while their earlier answer is still cached",
+      "outcome": "they are denied",
+      "acceptance": ["After grant, cached check, revoke and 1 second, the check returns false"]
+    },
+    {
+      "id": "b-isolation", "type": "behavior", "origin": "agent", "epistemic": "inferred",
+      "title": "Cached answers never leak between organizations or users",
+      "actor": "a user in another organization, or another user in the same one",
+      "trigger": "they ask for a permission someone else has cached",
+      "outcome": "they get their own answer, not the cached one",
+      "acceptance": ["Org A / user 1 does not grant org B / user 1", "Org A / user 1 does not grant org A / user 2", "IDs containing separators cannot collide"]
+    },
+    {
+      "id": "k-residual-access", "type": "consequence", "origin": "agent", "epistemic": "hypothesized",
+      "title": "A revoked user could keep access for up to 5 minutes",
+      "description": "If the cache is not cleared on revocation, the old 'allowed' answer keeps being served until it expires.",
+      "affected": "the organization revoking access (e.g. after firing someone)", "severity": "high",
+      "reversibility": "Actions taken during the window cannot be undone by the cache change"
+    },
+    {
+      "id": "k-delayed-grant", "type": "consequence", "origin": "agent", "epistemic": "hypothesized",
+      "title": "A newly granted permission could take up to 5 minutes to work",
+      "description": "The cache also stores 'denied' answers. A user who was checked just before being granted access keeps being denied until the entry expires. Clearing on revocation does not fix this.",
+      "affected": "users who were just given access, and support staff", "severity": "medium",
+      "reversibility": "Resolves itself after 5 minutes"
+    },
+    {
+      "id": "k-memory", "type": "consequence", "origin": "agent", "epistemic": "hypothesized",
+      "title": "The cache grows without a size limit",
+      "affected": "the server's memory", "severity": "low",
+      "reversibility": "A restart clears it"
+    },
+    {
+      "id": "a-revoke-clears-cache", "type": "assumption", "origin": "agent", "epistemic": "hypothesized",
+      "title": "Revoking a permission clears its cached answer",
+      "refutation": "Grant, check, revoke, then check again within the TTL. If access is still allowed, the assumption is false.",
+      "check": { "id": "c-revocation", "holdsIf": "pass" }
+    },
+    {
+      "id": "a-single-process", "type": "assumption", "origin": "agent", "epistemic": "hypothesized",
+      "title": "Every revocation goes through this process",
+      "refutation": "Run two app instances, revoke through one, check through the other. Or edit the database directly. Neither is covered by any check yet."
+    },
+    {
+      "id": "q-grant-delay", "type": "question", "origin": "agent", "epistemic": "unknown",
+      "title": "Is a delay of up to 5 minutes acceptable when someone is granted access?",
+      "owner": "product owner"
+    }
+  ],
+  "edges": [
+    { "from": "b-fewer-queries", "to": "k-residual-access", "relation": "may_cause", "epistemic": "inferred", "rationale": "Serving cached answers means a revocation is not seen until the entry expires, unless something clears it." },
+    { "from": "b-fewer-queries", "to": "k-delayed-grant", "relation": "may_cause", "epistemic": "inferred", "rationale": "Denied answers are cached the same way as allowed ones." },
+    { "from": "b-fewer-queries", "to": "k-memory", "relation": "may_cause", "epistemic": "inferred", "rationale": "Entries are only replaced, never evicted." },
+    { "from": "b-revocation", "to": "k-residual-access", "relation": "mitigates", "epistemic": "inferred", "rationale": "Immediate denial removes the window." },
+    { "from": "b-revocation", "to": "a-revoke-clears-cache", "relation": "depends_on", "epistemic": "inferred", "rationale": "Immediate denial only happens if revocation clears the cached answer." },
+    { "from": "b-revocation", "to": "a-single-process", "relation": "depends_on", "epistemic": "inferred", "rationale": "The clearing is an in-process event; revocations elsewhere would not trigger it." },
+    { "from": "q-grant-delay", "to": "k-delayed-grant", "relation": "depends_on", "epistemic": "inferred", "rationale": "Whether this consequence matters depends on the answer." }
+  ],
+  "checks": [
+    { "id": "c-revocation", "description": "Revoked permission is denied immediately, even within the cache TTL", "cwd": ".", "command": "node --test --test-name-pattern=\"revoked permission is denied immediately\" test/", "verifies": ["b-revocation"] },
+    { "id": "c-cache", "description": "Cache hits and expiry", "cwd": ".", "command": "node --test test/cache.test.js", "verifies": ["b-fewer-queries"] },
+    { "id": "c-isolation", "description": "No leaks between organizations or users", "cwd": ".", "command": "node --test test/isolation.test.js", "verifies": ["b-isolation"] }
+  ],
+  "claims": [
+    { "id": "cl-tests-pass", "statement": "I ran the test suite and everything passes.", "about": ["b-revocation"] }
+  ],
+  "decisions": [
+    {
+      "id": "d-revocation-policy",
+      "basis": "analysis",
+      "question": "Can a revoked user keep access until their cached answer expires (up to 5 minutes)?",
+      "related": ["k-residual-access", "b-revocation"],
+      "options": [
+        { "id": "immediate", "label": "No — revocation must take effect immediately", "consequence": "Revocation clears the cached answer. Slightly more code, and it only works for revocations made through this process (see assumption)." },
+        { "id": "window", "label": "Yes — accept up to 5 minutes of residual access", "consequence": "Simplest. A fired employee could still act for up to 5 minutes." },
+        { "id": "no-cache", "label": "Don't cache permissions at all", "consequence": "No risk from caching, but no query savings either." }
+      ]
+    },
+    {
+      "id": "d-ship",
+      "question": "Approve this change for the behaviors, evidence and limits shown here?",
+      "related": ["b-fewer-queries", "b-revocation", "b-isolation"],
+      "options": [
+        { "id": "approve-scope", "label": "Approve", "consequence": "Approval covers exactly the code digest, analysis and check results in this report. Any change makes it stale." }
+      ]
+    }
+  ]
+}
