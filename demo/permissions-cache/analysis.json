@@ -87,7 +87,7 @@
     { "from": "q-grant-delay", "to": "k-delayed-grant", "relation": "depends_on", "epistemic": "inferred", "rationale": "Whether this consequence matters depends on the answer." }
   ],
   "checks": [
-    { "id": "c-revocation", "description": "Revoked permission is denied immediately, even within the cache TTL", "cwd": ".", "command": "node --test --test-name-pattern=\"revoked permission is denied immediately\" test/", "verifies": ["b-revocation"] },
+    { "id": "c-revocation", "description": "Revoked permission is denied immediately, even within the cache TTL", "cwd": ".", "command": "node --test --test-name-pattern=\"revoked permission is denied immediately\" test/revocation.test.js", "verifies": ["b-revocation"] },
     { "id": "c-cache", "description": "Cache hits and expiry", "cwd": ".", "command": "node --test test/cache.test.js", "verifies": ["b-fewer-queries"] },
     { "id": "c-isolation", "description": "No leaks between organizations or users", "cwd": ".", "command": "node --test test/isolation.test.js", "verifies": ["b-isolation"] }
   ],
