@@ -1,0 +1,924 @@
+{
+  "schemaVersion": 1,
+  "analysisId": "reservations-cancel-001",
+  "createdAt": "2026-09-26T00:00:00Z",
+  "producer": { "adapter": "manual", "agent": "grok", "model": "grok-4.7" },
+  "subject": {
+    "title": "Let members cancel a class spot",
+    "objective": "Add cancel so a member can give up a spot until two hours before the class starts. When that frees a spot, give it to the first person on the waitlist who still qualifies, and tell that person once. The answer says whether the cancel worked, an optional reason, and who was promoted, if anyone.",
+    "root": "../../examples/reservations"
+  },
+  "scope": {
+    "includedPaths": ["src", "test"],
+    "limitations": [
+      "Written before any cancellation code or tests exist. Nothing here was run, and nothing is observed behavior. The checks list is empty on purpose.",
+      "Only this example's class booking was examined: who can book, the waitlist order, the in-memory storage, the message recorder, and the app clock. Sign-in, payments, refunds, and real email or text delivery were not.",
+      "The storage keeps one copy of the data in memory. Every read and write pauses and lets another request run in between, and it cannot save several changes as one all-or-nothing step. A real database, and two copies of the app, were not tested.",
+      "Anyone who can call cancel with a member's id can cancel for that member. Booking already works the same way. Stopping one person from acting for another was not part of the request.",
+      "Saving a member again with a later expiry already replaces their membership. No separate renewal screen was examined beyond that.",
+      "A class is assumed to have a start time and a size, which booking already requires. Cancel does not invent those."
+    ]
+  },
+  "nodes": [
+    {
+      "id": "b-cancel-in-time",
+      "type": "behavior",
+      "origin": "human",
+      "epistemic": "inferred",
+      "title": "A booked member can give up a spot before the deadline",
+      "actor": "a member who holds a spot",
+      "trigger": "they cancel more than two hours before the class starts",
+      "outcome": "they no longer hold the spot, and the answer says ok. ok means the spot was given up, even when nobody is waiting to take it",
+      "acceptance": [
+        "Three hours before the start, Ana cancels the spot she holds. The answer says ok, and Ana is no longer booked",
+        "Ana's membership expired after she booked. Three hours before the start she can still cancel, and she no longer holds the spot",
+        "A successful cancel with nobody waiting still says ok"
+      ]
+    },
+    {
+      "id": "b-too-late",
+      "type": "behavior",
+      "origin": "human",
+      "epistemic": "inferred",
+      "title": "Inside the last two hours the spot stays theirs",
+      "actor": "a member who holds a spot",
+      "trigger": "they cancel inside the last two hours, or after the class has started",
+      "outcome": "they keep the spot, the answer says ok is false and gives a reason, the waitlist does not change, and no message is sent",
+      "acceptance": [
+        "One hour before the start, Ana cancels. The answer says ok is false and includes a reason. Ana stays booked, the waitlist is unchanged, and no message is sent",
+        "After the class has started, Ana cancels. She stays booked, nobody moves up, and no message is sent"
+      ]
+    },
+    {
+      "id": "b-promote",
+      "type": "behavior",
+      "origin": "human",
+      "epistemic": "inferred",
+      "title": "An open spot goes to the person who has waited longest and still qualifies",
+      "actor": "the qualifying member who has been on the waitlist the longest",
+      "trigger": "someone else's cancel leaves the class below its size",
+      "outcome": "they are booked, they leave the waitlist, nobody else moves up with them, and the answer names their member id as promoted",
+      "acceptance": [
+        "The class has one seat. Ana is booked. Ben joined the waitlist, then Cam. Both still qualify. Ana cancels three hours ahead. Ben is booked and is no longer waiting. Cam is still waiting. promoted is Ben's member id",
+        "Ben's membership has lapsed and Cam's has not. Cam is booked and Ben is not. Cam is no longer waiting. People who were behind Cam keep their order",
+        "Only one waiting member moves up, even when the class already had another empty seat",
+        "The class is already over its size and Ana cancels. No waiter is moved in, and the class is one person closer to its size"
+      ]
+    },
+    {
+      "id": "b-notify-once",
+      "type": "behavior",
+      "origin": "human",
+      "epistemic": "inferred",
+      "title": "The person who receives the spot is told once",
+      "actor": "the member who was just given the spot",
+      "trigger": "a cancel moves them up from the waitlist",
+      "outcome": "exactly one message is recorded for their member id. Nobody else is messaged for that cancel, including the member who gave the spot up",
+      "acceptance": [
+        "Ben is promoted. Exactly one message is recorded, and it is for Ben. Ana and Cam get none",
+        "Nobody is promoted. No message is recorded",
+        "The cancel is refused. No message is recorded",
+        "Ben is moved up and messaged, then Ben cancels in time and Cam is moved up. Cam gets one message. Ben's only message is the one from when Ben was moved up"
+      ]
+    },
+    {
+      "id": "b-nobody",
+      "type": "behavior",
+      "origin": "agent",
+      "epistemic": "inferred",
+      "title": "If nobody qualifies, the seat stays open and nobody is told",
+      "actor": "a member who holds a spot",
+      "trigger": "they cancel in time and every person on the waitlist fails the qualification check, or the waitlist is empty",
+      "outcome": "the cancel still succeeds, the seat stays empty, the answer names no promoted member, and no message is sent. A qualified member can book that open seat afterward",
+      "acceptance": [
+        "Ana is the only person booked and nobody is waiting. She cancels three hours ahead. The answer says ok, no promoted member is named, the class has no booking, and no message is sent. Ben then books and is booked, not waitlisted",
+        "The only waiting member's membership has lapsed. Ana cancels in time. Nobody new is booked, no message is sent, and a qualified member can book the open seat"
+      ]
+    },
+    {
+      "id": "b-refused",
+      "type": "behavior",
+      "origin": "agent",
+      "epistemic": "inferred",
+      "title": "A cancel that does not free a spot changes no one else's place",
+      "actor": "a member",
+      "trigger": "they cancel a class that does not exist, they do not hold a spot in it, or they already gave that spot up",
+      "outcome": "the answer says ok is false and gives a reason. Nobody else is booked because of it, and no message is sent",
+      "acceptance": [
+        "Cancelling a class id that was never created says ok is false and includes a reason. No booking is created and no message is sent",
+        "A member who does not hold a spot cannot cause another member to be booked or messaged",
+        "Ana cancels in time, then Ana cancels again. The second answer says ok is false. It does not move a second person and does not send another message"
+      ]
+    },
+    {
+      "id": "b-other-class",
+      "type": "behavior",
+      "origin": "agent",
+      "epistemic": "inferred",
+      "title": "Cancelling one class leaves their other classes alone",
+      "actor": "a member who is booked in two classes",
+      "trigger": "they cancel only one of them, in time",
+      "outcome": "the other class keeps their booking and keeps its own waitlist",
+      "acceptance": [
+        "Ana is booked for yoga and for pilates. She cancels yoga three hours ahead. Pilates still has Ana booked, and the pilates waitlist is unchanged"
+      ]
+    },
+    {
+      "id": "b-book-window",
+      "type": "behavior",
+      "origin": "agent",
+      "epistemic": "inferred",
+      "title": "Booking stays open until the class starts",
+      "actor": "a member who does not hold a spot",
+      "trigger": "they book during the last two hours, or they book a class that already starts in less than two hours",
+      "outcome": "an open seat is still given to them, and a full class still puts them on the end of the waitlist. The new two-hour rule applies to giving a spot up, and booking is unchanged",
+      "acceptance": [
+        "Ninety minutes before the start, Ben has no spot and the class has an open seat. Ben books and is booked",
+        "Ninety minutes before the start, the class is full. Nobody can cancel, and the waitlist does not move",
+        "A member whose membership has expired still cannot book",
+        "When the class is full, new members still join the waitlist at the end, in the order they join"
+      ]
+    },
+    {
+      "id": "b-rebook",
+      "type": "behavior",
+      "origin": "agent",
+      "epistemic": "inferred",
+      "title": "Giving up a spot does not ban them from booking it again",
+      "actor": "a member who just gave up a spot and whose membership is valid",
+      "trigger": "they book that same class again before it starts",
+      "outcome": "the normal booking rules apply. They get a free seat, or they join the end of the waitlist if the class is full",
+      "acceptance": [
+        "Ana cancels three hours ahead, nobody is waiting, and Ana books again. Ana is booked",
+        "Ana cancels, Ben moves up, and the class is full. Ana books again. Ben stays booked and Ana is at the end of the waitlist"
+      ]
+    },
+    {
+      "id": "k-locked-window",
+      "type": "consequence",
+      "origin": "agent",
+      "epistemic": "hypothesized",
+      "title": "The waitlist cannot move up during the last two hours",
+      "description": "The request stops cancellation two hours before the start. A full class stays full for those two hours, even if a booked member no longer plans to attend. People waiting do not get that seat through a cancel.",
+      "affected": "members on the waitlist, and booked members with a last-minute conflict",
+      "severity": "medium",
+      "reversibility": "After the class starts, that chance is gone. The roster stays as it was at the deadline"
+    },
+    {
+      "id": "k-short-notice",
+      "type": "consequence",
+      "origin": "agent",
+      "epistemic": "hypothesized",
+      "title": "A class that starts in under two hours can never be cancelled",
+      "description": "Booking is allowed until the start. Cancel is not allowed inside two hours. A class added for ninety minutes from now can be booked, and the member who took the seat cannot give it up.",
+      "affected": "members who book a class that is already inside the two-hour window",
+      "severity": "medium",
+      "reversibility": "They keep the spot through the class"
+    },
+    {
+      "id": "k-trapped",
+      "type": "consequence",
+      "origin": "agent",
+      "epistemic": "hypothesized",
+      "title": "Someone moved up at the deadline cannot turn the spot down",
+      "description": "The spot is given automatically. The message is not a question. If a cancel is allowed at the exact two-hour mark, the person who moves up is already inside the window where cancel is refused. They hold the seat, and everyone behind them stays waiting. If the exact mark counts as too late, a person moved up a few minutes earlier still has only that short time to refuse.",
+      "affected": "the member who was moved up, and the members still waiting behind them",
+      "severity": "high",
+      "reversibility": "Once the deadline has passed, the system will not take the spot back. The class runs with them on the roster"
+    },
+    {
+      "id": "k-stuck-seat",
+      "type": "consequence",
+      "origin": "agent",
+      "epistemic": "hypothesized",
+      "title": "A lapsed member could keep a seat they are not allowed to release",
+      "description": "The request says members can cancel. It does not say they must still qualify. Qualification today is for taking a seat, and a membership can lapse after booking. If a lapsed member is refused, their seat stays taken and the waitlist never receives it.",
+      "affected": "the lapsed member and everyone on that class's waitlist",
+      "severity": "high",
+      "reversibility": "The seat stays unused for that class. Nothing in this change fills it later"
+    },
+    {
+      "id": "k-unwanted",
+      "type": "consequence",
+      "origin": "agent",
+      "epistemic": "hypothesized",
+      "title": "A waiting member is enrolled without being asked",
+      "description": "The request gives them the spot and tells them once. It does not let a waiting member take themselves off the list first. If they no longer want the class, they are still enrolled and messaged when they are the first who qualifies. They can give the new spot up only while the cancel deadline has not passed.",
+      "affected": "members on the waitlist who have changed their plans",
+      "severity": "medium",
+      "reversibility": "They can cancel only before the deadline. After that they keep the spot through the class"
+    },
+    {
+      "id": "k-twice",
+      "type": "consequence",
+      "origin": "agent",
+      "epistemic": "hypothesized",
+      "title": "Two cancels at the same moment can give one person two spots and two messages",
+      "description": "Moving a waiter up reads the list, writes it back, and adds a booking as separate steps. Each step pauses and lets another request run. Two cancels can both choose Ben, book him twice, and message him twice. Overlapping bookings can also leave one member both holding a spot and waiting, so a later cancel can hand the seat back to them.",
+      "affected": "the member who is told twice, and the waiting member who should have received the other seat",
+      "severity": "high",
+      "reversibility": "The extra message cannot be unsent. Someone has to correct the roster by hand"
+    },
+    {
+      "id": "k-lost-place",
+      "type": "consequence",
+      "origin": "agent",
+      "epistemic": "hypothesized",
+      "title": "Someone can vanish from the waitlist when two updates overlap",
+      "description": "The waitlist is saved by replacing the whole list. If a cancel and a new booking, or two cancels, save at the same time, one save can drop a person who was waiting or put a person who already moved up back on the list. Booking already saves the list this way, so two people joining at once can already drop one of them. Cancellation adds more saves of that same list.",
+      "affected": "members waiting for the class",
+      "severity": "high",
+      "reversibility": "Their place is gone. Nothing records that they had been waiting, so the system cannot put them back"
+    },
+    {
+      "id": "k-overfill",
+      "type": "consequence",
+      "origin": "agent",
+      "epistemic": "hypothesized",
+      "title": "The freed seat can be taken twice, and the class can go over its size",
+      "description": "The seat is freed in one save and given to the waiter in a later save. A booking in between can take it, and the waiter can still be added and told they are in. The class then has more bookings than its size. Two people booking the last seat at the same time can already overfill the class today. Always moving a waiter in, even when the class is still full after the cancel, keeps an overfull class overfull.",
+      "affected": "everyone booked into that class, and the member who was told they got the seat",
+      "severity": "high",
+      "reversibility": "The message cannot be unsent. Someone has to decide who actually attends"
+    },
+    {
+      "id": "k-silent",
+      "type": "consequence",
+      "origin": "agent",
+      "epistemic": "hypothesized",
+      "title": "The message and the spot can disagree",
+      "description": "Telling the member and saving the spot are separate steps. If they are told before the save sticks, they can hear about a spot they do not have. If the spot is saved and the message then fails, they have the spot and were never told, and cancelling again will not tell them because the spot is already given up. This example's recorder does not fail; it only keeps a list. A real sender can fail or retry.",
+      "affected": "the member who was supposed to move up",
+      "severity": "high",
+      "reversibility": "A false message cannot be unsent. A missed message is not sent again by this change, and they may miss the class"
+    },
+    {
+      "id": "k-no-receipt",
+      "type": "consequence",
+      "origin": "agent",
+      "epistemic": "hypothesized",
+      "title": "The member who cancels gets no message",
+      "description": "The request tells the person who received the spot. It does not ask for a confirmation to the person who gave it up. That member only has the ok answer from the cancel itself.",
+      "affected": "the member who cancels",
+      "severity": "low",
+      "reversibility": "No later message is sent. They can look at who is booked if the screen shows it"
+    },
+    {
+      "id": "k-renewal",
+      "type": "consequence",
+      "origin": "agent",
+      "epistemic": "hypothesized",
+      "title": "Dropping an unqualified waiter forgets a place a renewal could have kept",
+      "description": "A membership can lapse while someone is waiting, so they are skipped. Saving that member again with a later expiry makes them qualify again. If they were removed when skipped, that renewal does not give their place back; they would join again at the end, and only if the class is full. If they stay on the list, the next opening can still choose them in their old place.",
+      "affected": "members whose membership lapses and is later renewed, and the people waiting behind them",
+      "severity": "medium",
+      "reversibility": "A removed place is not restored by this change"
+    },
+    {
+      "id": "k-take-back",
+      "type": "consequence",
+      "origin": "agent",
+      "epistemic": "hypothesized",
+      "title": "They can cancel and immediately take a seat again",
+      "description": "Cancel does not, by itself, change booking. If nobody was waiting, they can book the same seat straight back. If someone moved up and the class is full, they join the end of the waitlist. Staff who expect a cancel to be final will not get that.",
+      "affected": "the member who cancelled, and staff who treat a cancel as final",
+      "severity": "low",
+      "reversibility": "They can cancel again while the deadline allows. After the deadline the new spot is locked too"
+    },
+    {
+      "id": "k-expires-before-class",
+      "type": "consequence",
+      "origin": "agent",
+      "epistemic": "hypothesized",
+      "title": "A membership can lapse before the class and still be given the spot",
+      "description": "Qualifying is checked at the moment of the cancel, not at the class start. A waiting member whose membership is valid today and runs out before the class can be moved up and will hold the spot when the class happens. Booking already works this way. This change repeats it for the person who moves up.",
+      "affected": "the class, and members whose membership ends before the class",
+      "severity": "medium",
+      "reversibility": "They keep the spot unless they cancel while the deadline still allows it"
+    },
+    {
+      "id": "a-holder",
+      "type": "assumption",
+      "origin": "agent",
+      "epistemic": "hypothesized",
+      "title": "Anyone holding the spot can cancel, even with a lapsed membership",
+      "refutation": "A member who still holds a spot, but whose membership has expired, is refused three hours before the start and keeps the seat."
+    },
+    {
+      "id": "a-eligible",
+      "type": "assumption",
+      "origin": "agent",
+      "epistemic": "hypothesized",
+      "title": "Eligible means the membership is valid right now and they do not already hold a spot",
+      "refutation": "Someone whose membership has already lapsed is given the spot, or someone is passed over even though their membership is valid now and they do not hold a spot. Judging the membership against the class start, rather than against now, also makes this false."
+    },
+    {
+      "id": "a-first",
+      "type": "assumption",
+      "origin": "agent",
+      "epistemic": "hypothesized",
+      "title": "First means whoever joined the waitlist earliest",
+      "refutation": "A later joiner gets the spot ahead of an earlier joiner who still qualifies. Nothing in the app records a priority, a payment tier, or a staff pick."
+    },
+    {
+      "id": "a-two-hours",
+      "type": "assumption",
+      "origin": "agent",
+      "epistemic": "hypothesized",
+      "title": "Two hours before the start is the last moment, and earlier cancels are allowed",
+      "refutation": "A cancel a day ahead is refused, or a cancel ninety minutes ahead is allowed, or the cutoff is not two hours on the same clock booking already uses. There are no time zones. The exact second of the deadline is a separate decision. The deadline is judged when the cancel is requested."
+    },
+    {
+      "id": "a-room",
+      "type": "assumption",
+      "origin": "agent",
+      "epistemic": "hypothesized",
+      "title": "A spot has freed up only when the class is below its size",
+      "refutation": "A waiter is moved in when, after the cancel, the class is still full or still over its size."
+    },
+    {
+      "id": "a-serial",
+      "type": "assumption",
+      "origin": "agent",
+      "epistemic": "hypothesized",
+      "title": "Only one booking or cancel for a class runs at a time",
+      "refutation": "Start two cancellations without waiting for the first to finish, or start a cancellation and a booking together. If the same person is booked twice, messaged twice, left both booked and waiting, or someone disappears from the waitlist, this is false. The storage is built so one request can pause and another can run in between."
+    },
+    {
+      "id": "a-notify-record",
+      "type": "assumption",
+      "origin": "agent",
+      "epistemic": "hypothesized",
+      "title": "Notify means one recorded message, not proof of delivery",
+      "refutation": "The member is treated as told when no message was recorded, or a real sender that fails or sends twice is treated as success. This example's notifier only adds to a list and does not fail."
+    },
+    {
+      "id": "a-ok",
+      "type": "assumption",
+      "origin": "agent",
+      "epistemic": "hypothesized",
+      "title": "ok means the spot was given up, not that a waiter was promoted",
+      "refutation": "A cancel that gives up the spot with nobody waiting comes back with ok false, or a refused cancel comes back with ok true."
+    },
+    {
+      "id": "q-trap",
+      "type": "question",
+      "origin": "agent",
+      "epistemic": "unknown",
+      "title": "Is it acceptable that a person moved onto the class at the cancellation deadline cannot turn the spot down?",
+      "owner": "product owner"
+    },
+    {
+      "id": "q-first",
+      "type": "question",
+      "origin": "agent",
+      "epistemic": "unknown",
+      "title": "Should the open spot always go to whoever has been waiting longest?",
+      "owner": "product owner"
+    }
+  ],
+  "edges": [
+    {
+      "from": "b-cancel-in-time",
+      "to": "a-two-hours",
+      "relation": "depends_on",
+      "epistemic": "inferred",
+      "rationale": "In-time means more than two hours before the start, on the clock booking already uses, and earlier cancels stay allowed."
+    },
+    {
+      "from": "b-cancel-in-time",
+      "to": "a-holder",
+      "relation": "depends_on",
+      "epistemic": "inferred",
+      "rationale": "A lapsed member can release a seat only if holding the seat is enough to cancel."
+    },
+    {
+      "from": "b-cancel-in-time",
+      "to": "a-ok",
+      "relation": "depends_on",
+      "epistemic": "inferred",
+      "rationale": "A successful cancel says ok even when the waitlist is empty and nobody is promoted."
+    },
+    {
+      "from": "b-too-late",
+      "to": "a-two-hours",
+      "relation": "depends_on",
+      "epistemic": "inferred",
+      "rationale": "The last two hours, and a class that has already started, are the same deadline."
+    },
+    {
+      "from": "b-too-late",
+      "to": "k-locked-window",
+      "relation": "may_cause",
+      "epistemic": "inferred",
+      "rationale": "Refusing cancels means a full class cannot free a seat for the waitlist in that window."
+    },
+    {
+      "from": "b-too-late",
+      "to": "k-short-notice",
+      "relation": "may_cause",
+      "epistemic": "inferred",
+      "rationale": "A class that is already inside the window can be booked under today's rules and can never be given up."
+    },
+    {
+      "from": "b-too-late",
+      "to": "k-trapped",
+      "relation": "may_cause",
+      "epistemic": "inferred",
+      "rationale": "Once the deadline has passed, the member who just received the spot is refused if they try to give it up."
+    },
+    {
+      "from": "b-too-late",
+      "to": "b-book-window",
+      "relation": "conflicts_with",
+      "epistemic": "inferred",
+      "rationale": "Both can be built. Together they surprise members: taking a spot stays open for two hours after giving a spot has closed."
+    },
+    {
+      "from": "b-book-window",
+      "to": "k-short-notice",
+      "relation": "may_cause",
+      "epistemic": "inferred",
+      "rationale": "Booking stays open until the start, including for a class nobody will be allowed to cancel."
+    },
+    {
+      "from": "b-book-window",
+      "to": "k-overfill",
+      "relation": "may_cause",
+      "epistemic": "inferred",
+      "rationale": "A new booking is a separate series of saves, so it can take the freed seat before the waiter is saved."
+    },
+    {
+      "from": "b-book-window",
+      "to": "k-expires-before-class",
+      "relation": "may_cause",
+      "epistemic": "inferred",
+      "rationale": "Booking already qualifies a member at the moment they book, even when the membership ends before the class."
+    },
+    {
+      "from": "b-promote",
+      "to": "a-eligible",
+      "relation": "depends_on",
+      "epistemic": "inferred",
+      "rationale": "The person chosen is whoever passes the existing qualification rule at the moment of the cancel."
+    },
+    {
+      "from": "b-promote",
+      "to": "a-first",
+      "relation": "depends_on",
+      "epistemic": "inferred",
+      "rationale": "First is the earliest qualifying person on the waitlist, which is kept in join order."
+    },
+    {
+      "from": "b-promote",
+      "to": "a-room",
+      "relation": "depends_on",
+      "epistemic": "inferred",
+      "rationale": "Someone moves up only when the cancel leaves the class below its size."
+    },
+    {
+      "from": "b-promote",
+      "to": "a-serial",
+      "relation": "depends_on",
+      "epistemic": "inferred",
+      "rationale": "One waiter, booked once, holds only if another request does not run in the gaps between saves."
+    },
+    {
+      "from": "b-promote",
+      "to": "k-trapped",
+      "relation": "may_cause",
+      "epistemic": "inferred",
+      "rationale": "The spot is given automatically, so a move-up at the deadline leaves no chance to refuse."
+    },
+    {
+      "from": "b-promote",
+      "to": "k-unwanted",
+      "relation": "may_cause",
+      "epistemic": "inferred",
+      "rationale": "The longest-waiting qualified member is enrolled because they qualify, without asking if they still want the class."
+    },
+    {
+      "from": "b-promote",
+      "to": "k-twice",
+      "relation": "may_cause",
+      "epistemic": "inferred",
+      "rationale": "Two overlapping cancels can both read the same head of the waitlist, book that person, and message them."
+    },
+    {
+      "from": "b-promote",
+      "to": "k-lost-place",
+      "relation": "may_cause",
+      "epistemic": "inferred",
+      "rationale": "Each cancel replaces the whole waitlist. A second save can drop someone or put a promoted person back on the list."
+    },
+    {
+      "from": "b-promote",
+      "to": "k-overfill",
+      "relation": "may_cause",
+      "epistemic": "inferred",
+      "rationale": "The seat is free for a moment before the waiter is saved, and another booking can fill it as well."
+    },
+    {
+      "from": "b-promote",
+      "to": "k-silent",
+      "relation": "may_cause",
+      "epistemic": "hypothesized",
+      "rationale": "The message is its own step. It can be recorded when the booking did not stick, or skipped when the booking did."
+    },
+    {
+      "from": "b-promote",
+      "to": "k-renewal",
+      "relation": "may_cause",
+      "epistemic": "hypothesized",
+      "rationale": "If an unqualified waiter is removed when they are skipped, a later renewal does not put them back in line."
+    },
+    {
+      "from": "b-promote",
+      "to": "k-expires-before-class",
+      "relation": "may_cause",
+      "epistemic": "inferred",
+      "rationale": "The qualification check looks at now, so a membership that ends before the class can still be promoted."
+    },
+    {
+      "from": "b-promote",
+      "to": "k-overfill",
+      "relation": "conflicts_with",
+      "epistemic": "inferred",
+      "rationale": "The behavior promises one waiter the seat. An overlapping booking can put an extra person in the class and still tell the waiter they are in."
+    },
+    {
+      "from": "b-promote",
+      "to": "k-lost-place",
+      "relation": "conflicts_with",
+      "epistemic": "inferred",
+      "rationale": "The behavior promises that the people behind keep their order. Overlapping saves of the whole list can erase that order."
+    },
+    {
+      "from": "b-notify-once",
+      "to": "b-promote",
+      "relation": "depends_on",
+      "epistemic": "inferred",
+      "rationale": "There is a person to tell only when a cancel actually moves someone up."
+    },
+    {
+      "from": "b-notify-once",
+      "to": "a-serial",
+      "relation": "depends_on",
+      "epistemic": "inferred",
+      "rationale": "One message holds only when two cancels cannot both send one."
+    },
+    {
+      "from": "b-notify-once",
+      "to": "a-notify-record",
+      "relation": "depends_on",
+      "epistemic": "inferred",
+      "rationale": "Told, in this example, means one recorded message, not a delivered email or text."
+    },
+    {
+      "from": "b-notify-once",
+      "to": "k-twice",
+      "relation": "conflicts_with",
+      "epistemic": "inferred",
+      "rationale": "The request asks for one message. Two overlapping cancels can each send one to the same member."
+    },
+    {
+      "from": "b-notify-once",
+      "to": "k-no-receipt",
+      "relation": "may_cause",
+      "epistemic": "inferred",
+      "rationale": "Only the person who moves up is messaged, so the person who gave up the spot gets none."
+    },
+    {
+      "from": "b-notify-once",
+      "to": "k-silent",
+      "relation": "may_cause",
+      "epistemic": "hypothesized",
+      "rationale": "Sending once, and not again when the same cancel is retried, means a failed send is never repeated."
+    },
+    {
+      "from": "b-nobody",
+      "to": "a-eligible",
+      "relation": "depends_on",
+      "epistemic": "inferred",
+      "rationale": "Nobody qualifies is decided with the same rule used to choose who moves up."
+    },
+    {
+      "from": "b-nobody",
+      "to": "a-ok",
+      "relation": "depends_on",
+      "epistemic": "inferred",
+      "rationale": "The cancel worked even though promoted names no one, so ok has to mean the spot was given up."
+    },
+    {
+      "from": "b-refused",
+      "to": "a-ok",
+      "relation": "depends_on",
+      "epistemic": "inferred",
+      "rationale": "A refusal and an empty waitlist can both name no promoted member. ok is what separates them."
+    },
+    {
+      "from": "b-rebook",
+      "to": "k-take-back",
+      "relation": "may_cause",
+      "epistemic": "inferred",
+      "rationale": "Leaving the booking rules unchanged means a member can take a seat again after cancelling."
+    },
+    {
+      "from": "b-cancel-in-time",
+      "to": "k-unwanted",
+      "relation": "mitigates",
+      "epistemic": "inferred",
+      "rationale": "Until the deadline, a person who was moved up can give that spot up, which offers it to the next qualified person. This does not help a move-up that happens on the deadline itself."
+    },
+    {
+      "from": "a-holder",
+      "to": "k-stuck-seat",
+      "relation": "mitigates",
+      "epistemic": "inferred",
+      "rationale": "Letting a lapsed member cancel frees the seat for the waitlist."
+    },
+    {
+      "from": "a-serial",
+      "to": "k-twice",
+      "relation": "mitigates",
+      "epistemic": "inferred",
+      "rationale": "If a second cancel cannot start until the first has finished, they cannot both choose and message the same person."
+    },
+    {
+      "from": "a-serial",
+      "to": "k-lost-place",
+      "relation": "mitigates",
+      "epistemic": "inferred",
+      "rationale": "If waitlist saves cannot overlap, one save cannot wipe another person's place."
+    },
+    {
+      "from": "a-serial",
+      "to": "k-overfill",
+      "relation": "mitigates",
+      "epistemic": "inferred",
+      "rationale": "Stopping overlap removes the gap where a booking takes the freed seat. Two bookings of the last seat can still overfill on their own, because that happens inside booking."
+    },
+    {
+      "from": "a-room",
+      "to": "k-overfill",
+      "relation": "mitigates",
+      "epistemic": "inferred",
+      "rationale": "Moving someone in only when there is room stops a cancel from filling a class that is already full. It does not stop a booking that sneaks into the gap."
+    },
+    {
+      "from": "q-trap",
+      "to": "k-trapped",
+      "relation": "depends_on",
+      "epistemic": "inferred",
+      "rationale": "Whether this consequence is acceptable is the product owner's answer."
+    },
+    {
+      "from": "q-first",
+      "to": "b-promote",
+      "relation": "depends_on",
+      "epistemic": "inferred",
+      "rationale": "Promotion gives the seat to whoever has waited longest. If someone should jump the line, that behavior is the wrong rule."
+    }
+  ],
+  "checks": [],
+  "decisions": [
+    {
+      "id": "d-deadline",
+      "basis": "analysis",
+      "question": "When exactly two hours remain before the start, can the member still cancel?",
+      "related": ["b-cancel-in-time", "b-too-late", "k-trapped", "a-two-hours"],
+      "options": [
+        {
+          "id": "exact-too-late",
+          "label": "That exact moment is already too late",
+          "consequence": "A cancel at that moment is refused. This matches booking, where the exact start moment already counts as started. Someone moved up a few minutes earlier still has a short time to give the spot up. A class that starts in less than two hours can never be cancelled, whichever way you answer this."
+        },
+        {
+          "id": "exact-allowed",
+          "label": "That exact moment is still on time",
+          "consequence": "A cancel at that moment succeeds. A person moved up at that moment is already too late to give the spot up, so they are enrolled with no chance to refuse. A class that starts in exactly two hours can be cancelled only at that moment."
+        }
+      ]
+    },
+    {
+      "id": "d-who-cancels",
+      "basis": "analysis",
+      "question": "Can a member whose membership has lapsed still give up a spot they hold?",
+      "related": ["a-holder", "k-stuck-seat", "b-cancel-in-time"],
+      "options": [
+        {
+          "id": "holder-may-cancel",
+          "label": "Yes — holding the spot is enough, until the deadline",
+          "consequence": "The seat can move to the waitlist. A lapsed member cannot book a new spot, and they can release one they already have."
+        },
+        {
+          "id": "only-if-eligible",
+          "label": "No — only a member who could still book can cancel",
+          "consequence": "A lapsed member keeps the seat. The waitlist does not get it. The class can run with a seat that member cannot use and cannot release."
+        }
+      ]
+    },
+    {
+      "id": "d-waitlist-leave",
+      "basis": "analysis",
+      "question": "Can a member who is only waiting take themselves off the list?",
+      "related": ["k-unwanted", "b-refused", "b-promote"],
+      "options": [
+        {
+          "id": "waitlist-stays",
+          "label": "No — this change only gives up a held spot",
+          "consequence": "They stay in line. If they qualify when a seat opens, they are enrolled and messaged. They can give that spot up only if the deadline has not passed."
+        },
+        {
+          "id": "waitlist-may-leave",
+          "label": "Yes — cancel removes them from the waitlist",
+          "consequence": "They leave the list. Nobody else moves up, and no message is sent, because no seat was freed. The answer says ok, and promoted names no one. A member who holds a spot still follows the other rules."
+        }
+      ]
+    },
+    {
+      "id": "d-skipped",
+      "basis": "analysis",
+      "question": "When the person at the front of the waitlist no longer qualifies, what happens to them?",
+      "related": ["k-renewal", "b-promote", "a-eligible"],
+      "options": [
+        {
+          "id": "keep-place",
+          "label": "Leave them on the list, and skip them",
+          "consequence": "The seat goes to the next person who qualifies, which is what the request asks. If the skipped member's membership is renewed before the next opening, they keep their old place. The list can hold people who cannot take a seat today. They do not block the people behind them."
+        },
+        {
+          "id": "drop-place",
+          "label": "Remove them from the list when they are skipped",
+          "consequence": "The list only has people who qualified at the last check. A later renewal does not give their place back. They would have to join again at the end, and only if the class is full."
+        }
+      ]
+    },
+    {
+      "id": "d-when-full",
+      "basis": "analysis",
+      "question": "If the class is already full or overfull after the cancel, should a waiter still be moved in?",
+      "related": ["a-room", "k-overfill", "b-promote"],
+      "options": [
+        {
+          "id": "only-if-room",
+          "label": "Only when the cancel leaves a real open seat",
+          "consequence": "A class that was already over its size shrinks by one and does not immediately fill again. The waitlist moves when there is room. Overlap while booking can still put the class over its size."
+        },
+        {
+          "id": "always-swap",
+          "label": "Always move the next qualifying waiter in",
+          "consequence": "The class size does not fall. If it was already overfull, it stays overfull. A waiter is told they got a seat even though the class was still full without them."
+        }
+      ]
+    },
+    {
+      "id": "d-overlap",
+      "basis": "analysis",
+      "question": "What should happen when two people book or cancel the same class at the same time?",
+      "related": ["a-serial", "k-twice", "k-lost-place", "k-overfill", "b-notify-once", "b-promote"],
+      "options": [
+        {
+          "id": "allow-overlap",
+          "label": "Allow it, as booking does today",
+          "consequence": "Two people acting together can give one waiter two spots, message them twice, drop someone from the waitlist, or let a new booking take the seat the waiter was supposed to get. Least new machinery. The once-only message is not guaranteed when that happens."
+        },
+        {
+          "id": "one-at-a-time",
+          "label": "Finish one booking or cancel before the next starts",
+          "consequence": "Stops those overlaps. This storage cannot do it today: each save is separate and lets the next request in, so this is more work. If booking follows the same rule, the last seat stops being taken twice as well."
+        },
+        {
+          "id": "no-auto-promote",
+          "label": "Do not move a waiter in automatically",
+          "consequence": "The seat is simply freed. Nobody is messaged. A waiter must book it themselves and can lose it to someone faster. This avoids the promotion gaps and does not do what was asked."
+        }
+      ]
+    },
+    {
+      "id": "d-missed-message",
+      "basis": "analysis",
+      "question": "If the message cannot be sent, does the member still keep the spot?",
+      "related": ["k-silent", "b-notify-once", "a-notify-record"],
+      "options": [
+        {
+          "id": "keep-spot",
+          "label": "Yes — the spot stays given, and that cancel does not message again",
+          "consequence": "They can be enrolled and never told. In this example the recorder does not fail, so this shows up with a real sender. It keeps the once-only rule by not sending a second time."
+        },
+        {
+          "id": "spot-needs-message",
+          "label": "No — they get the spot only if the message was accepted",
+          "consequence": "The save and the message would need to succeed or fail together. This storage cannot do that. The message can be recorded and the save can still fail, or the reverse. A real sender that retries can still deliver twice."
+        }
+      ]
+    },
+    {
+      "id": "d-message-text",
+      "basis": "analysis",
+      "question": "What words should the member who received the spot read?",
+      "related": ["b-notify-once"],
+      "options": [
+        {
+          "id": "standard-sentence",
+          "label": "One fixed sentence that names the class",
+          "consequence": "They see a sentence such as: You now have a spot in yoga. The app only has the class id, not a separate display name. The sentence does not name any other member. Nobody else is messaged."
+        },
+        {
+          "id": "owner-words",
+          "label": "Wait for the product owner to supply the exact words",
+          "consequence": "No message text is invented. The change is not ready to ship until those words are chosen. The person told, and the once-only rule, stay as in the behaviors."
+        }
+      ]
+    },
+    {
+      "id": "d-answer-shape",
+      "basis": "analysis",
+      "question": "When nobody moves up, does the answer include promoted with no one, or leave it out?",
+      "related": ["b-nobody", "b-promote", "b-refused"],
+      "options": [
+        {
+          "id": "promoted-null",
+          "label": "Always include promoted, using null when nobody moved",
+          "consequence": "Callers can always read promoted. Null means no one, including when the cancel is refused. ok is what separates a refusal from a successful cancel with an empty waitlist."
+        },
+        {
+          "id": "promoted-omit",
+          "label": "Leave promoted out when nobody moved",
+          "consequence": "This matches the optional mark in the request. Include promoted, set to the member id, only when someone moved up. A refusal and an empty waitlist both leave it out. ok tells them apart."
+        }
+      ]
+    },
+    {
+      "id": "d-reasons",
+      "basis": "analysis",
+      "question": "When a cancel is refused, how specific should the reason be?",
+      "related": ["b-refused", "b-too-late"],
+      "options": [
+        {
+          "id": "reasons-specific",
+          "label": "A different short reason for each case",
+          "consequence": "The cases are: no such class, too late to cancel, and this member does not hold a spot. Support can tell them apart. Callers may come to rely on the exact wording."
+        },
+        {
+          "id": "reason-generic",
+          "label": "One reason for every refusal",
+          "consequence": "Simpler. The member is not told whether they were too late, the class does not exist, or they never held the spot. ok false still means nothing changed and nobody was messaged."
+        }
+      ]
+    },
+    {
+      "id": "d-rebook",
+      "basis": "analysis",
+      "question": "After a member cancels, may they book that same class again?",
+      "related": ["b-rebook", "k-take-back"],
+      "options": [
+        {
+          "id": "allow-rebook",
+          "label": "Yes — the normal booking rules apply",
+          "consequence": "If nobody was waiting, they can take the same seat straight back. If someone moved up and the class is full, they join the end of the waitlist. A cancel is not a ban. This is what booking does today."
+        },
+        {
+          "id": "no-rebook",
+          "label": "No — cancelling bars them from that class",
+          "consequence": "Extra rule the request did not ask for. The app would have to remember the cancellation. It stops the take-back, and it also stops a genuine change of plans."
+        }
+      ]
+    },
+    {
+      "id": "d-late-book",
+      "basis": "analysis",
+      "question": "Should new bookings close at the same two-hour deadline as cancel?",
+      "related": ["b-book-window", "b-too-late", "k-short-notice", "k-locked-window"],
+      "options": [
+        {
+          "id": "keep-booking",
+          "label": "No — booking stays open until the class starts",
+          "consequence": "Today's booking rule stays. A free seat can still be taken in the last two hours, including for a class that nobody is allowed to cancel. A full class cannot shrink in that window."
+        },
+        {
+          "id": "close-together",
+          "label": "Yes — stop new bookings two hours before the start",
+          "consequence": "The rules match. This changes booking, which the request did not ask for. A free seat in the last two hours stays empty, and a class scheduled inside that window cannot be booked either."
+        }
+      ]
+    },
+    {
+      "id": "d-ship",
+      "question": "Approve this change for the behaviors, evidence and limits shown here?",
+      "related": ["b-cancel-in-time", "b-too-late", "b-promote", "b-notify-once", "b-nobody", "b-refused"],
+      "options": [
+        {
+          "id": "approve",
+          "label": "Approve",
+          "consequence": "Covers exactly the code, analysis and test results in this report. Any later change makes the approval stale. The checks list is empty, so this approval does not mean any behavior was tested."
+        },
+        {
+          "id": "reject",
+          "label": "Reject",
+          "consequence": "The change is not shipped as it stands."
+        }
+      ]
+    }
+  ]
+}
