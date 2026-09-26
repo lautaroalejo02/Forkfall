@@ -2,17 +2,23 @@
 // piece of analysis text is escaped because it is untrusted agent output.
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+// Only show shell-safe paths in copyable commands; anything else becomes a placeholder.
+const safeArg = (s, placeholder) => (/^[\w./-]+$/.test(s) ? s : placeholder);
+
 const BADGES = {
   verified: ['ok', '✔', 'Verified by captured test'],
   failed: ['bad', '✖', 'Failed a captured test'],
   not_verified: ['unk', '?', 'Not verified'],
   pass: ['ok', '✔', 'Passed'],
   fail: ['bad', '✖', 'Failed'],
+  inconclusive: ['warn', '~', 'Inconclusive: code changed while the check ran'],
   outdated: ['warn', '⟲', 'Evidence is from a different version of the code'],
   never_run: ['unk', '?', 'Never run'],
   supported: ['ok', '✔', 'Supported by captured test'],
   contradicted: ['bad', '✖', 'Contradicted by captured test'],
   unexamined: ['unk', '?', 'Unexamined'],
+  demonstrated: ['bad', '✖', 'Shown by a failing test'],
+  contradicted_claim: ['bad', '✖', 'Agent claim contradicted by a failing test'],
   pending: ['warn', '●', 'Needs your decision'],
   current: ['ok', '✔', 'Decided, still valid'],
   stale: ['bad', '⟲', 'Decision is stale: something you reviewed has changed'],
@@ -34,6 +40,14 @@ export function renderReport(ctx, state) {
   const edgesOf = (id) => a.edges.filter((e) => e.from === id || e.to === id);
   const claimsAbout = (id) => (a.claims ?? []).filter((c) => c.about.includes(id));
 
+  const failedBehaviors = nodes('behavior').filter((n) => state.behaviors[n.id].status === 'failed');
+  const demonstratedBy = (id) => a.edges
+    .filter((e) => e.to === id && e.relation === 'mitigates' && state.behaviors[e.from]?.status === 'failed')
+    .map((e) => e.from);
+  const consequenceBadge = (n) => (demonstratedBy(n.id).length ? badge('demonstrated') : badge(n.epistemic));
+  const untested = nodes('consequence').filter((n) => !demonstratedBy(n.id).length).length
+    + nodes('assumption').filter((n) => state.assumptions[n.id].status === 'unexamined').length;
+  const checkCount = (st) => Object.values(state.checks).filter((c) => c.status === st).length;
   const pendingDecisions = a.decisions.filter((d) => state.decisions[d.id].status !== 'current');
   const contradicted = nodes('assumption').filter((n) => state.assumptions[n.id].status === 'contradicted');
   const counts = (st) => nodes('behavior').filter((n) => state.behaviors[n.id].status === st).length;
@@ -48,8 +62,10 @@ export function renderReport(ctx, state) {
     </div>`;
   };
 
-  const claimBlock = (id) => claimsAbout(id).map((c) =>
-    `<p class="claim"><span class="badge unk">Agent statement — not evidence</span> ${esc(c.statement)}</p>`).join('');
+  const claimBlock = (id) => claimsAbout(id).map((c) => {
+    const refuted = c.about.some((x) => state.behaviors[x]?.status === 'failed');
+    return `<p class="claim">${refuted ? badge('contradicted_claim') : '<span class="badge unk">Agent statement — not evidence</span>'} ${esc(c.statement)}</p>`;
+  }).join('');
 
   const relations = (id) => {
     const es = edgesOf(id);
@@ -67,7 +83,7 @@ export function renderReport(ctx, state) {
       <ul class="options">${d.options.map((o) => `<li><strong>${esc(o.label)}</strong> <code>${esc(o.id)}</code><br>${esc(o.consequence)}</li>`).join('')}</ul>
       <p class="meta">${d.basis === 'analysis' ? 'Policy decision: stays valid while this analysis is unchanged.' : 'Covers the exact code, analysis and check results in this report. Any change makes it stale.'}</p>
       ${d.related?.length ? `<p class="meta">Related: ${d.related.map(title).join(', ')}</p>` : ''}
-      <p class="meta">To decide: <code>forkfall decide ${esc(ctx.relFile)} ${esc(d.id)} &lt;option&gt; --by "your name"</code></p>
+      <p class="meta">To decide: <code>forkfall decide ${esc(safeArg(ctx.relFile, '<analysis.json>'))} ${esc(d.id)} &lt;option&gt; --by "your name" --basis ${esc(st.basis.slice(0, 16))}</code></p>
       ${hist ? `<details ${st.status === 'stale' ? 'open' : ''}><summary>History</summary><ul>${hist}</ul></details>` : ''}
     </article>`;
   };
@@ -87,6 +103,7 @@ export function renderReport(ctx, state) {
 
   const simpleCard = (n, extra) => `<article class="card" id="${esc(n.id)}">
       <h3>${esc(n.title)} ${extra}</h3>${n.description ? `<p>${esc(n.description)}</p>` : ''}
+      ${n.type === 'consequence' && demonstratedBy(n.id).length ? `<p class="alert">A captured test shows this happens: ${demonstratedBy(n.id).map(title).join(', ')} failed.</p>` : ''}
       ${n.type === 'consequence' ? `<p><strong>Who is affected:</strong> ${esc(n.affected)} · <strong>Severity:</strong> ${esc(n.severity)} · <strong>Reversibility:</strong> ${esc(n.reversibility)}</p>` : ''}
       ${n.type === 'assumption' ? `<p><strong>How it could be proven wrong:</strong> ${esc(n.refutation)}</p>${n.check ? evidenceBlock(a.checks.find((c) => c.id === n.check.id)) : ''}` : ''}
       ${n.type === 'question' ? `<p><strong>Who answers:</strong> ${esc(n.owner)}</p>` : ''}
@@ -116,31 +133,31 @@ a:focus,summary:focus{outline:3px solid #1a5fb4}
 <p><strong>Goal:</strong> ${esc(a.subject.objective)}</p>
 <p class="meta">Analysis by ${esc(a.producer.agent)}${a.producer.model ? ` (${esc(a.producer.model)})` : ''} via ${esc(a.producer.adapter)} · code digest ${esc(state.subject.digest.slice(0, 12))} over ${state.subject.fileCount} files in ${a.scope.includedPaths.map(esc).join(', ')} · commit ${esc((state.commit ?? 'none').slice(0, 10))} · review basis ${esc(state.reviewBasisDigest.slice(0, 12))}</p>
 </header>
-<nav aria-label="Sections"><a href="#decide">Decisions</a> · <a href="#behaviors">Behaviors</a> · <a href="#consequences">Consequences</a> · <a href="#assumptions">Assumptions</a> · <a href="#questions">Questions</a> · <a href="#limits">Limits</a></nav>
+<nav aria-label="Sections"><a href="#decide">Decisions</a> · <a href="#questions">Questions</a> · <a href="#behaviors">Behaviors</a> · <a href="#consequences">Consequences</a> · <a href="#assumptions">Assumptions</a> · <a href="#limits">Limits</a></nav>
 <main>
 <section aria-label="Summary" class="summary">
   <div><strong>${pendingDecisions.length}</strong> decision(s) need you</div>
-  <div><strong>${counts('verified')}</strong> behavior(s) verified</div>
-  <div><strong>${counts('failed')}</strong> failed</div>
-  <div><strong>${counts('not_verified')}</strong> without evidence</div>
-  <div><strong>${contradicted.length}</strong> contradicted assumption(s)</div>
+  <div><strong>${checkCount('pass')}</strong> test(s) passed · <strong>${checkCount('fail')}</strong> failed${checkCount('outdated') + checkCount('never_run') + checkCount('inconclusive') ? ` · <strong>${checkCount('outdated') + checkCount('never_run') + checkCount('inconclusive')}</strong> not run on this version` : ''}</div>
+  <div><strong>${counts('verified')}</strong> of ${nodes('behavior').length} behavior(s) verified</div>
+  <div><strong>${untested}</strong> risk(s) and assumption(s) not tested</div>
 </section>
-${contradicted.length ? `<p class="alert">${badge('contradicted')} ${contradicted.map((n) => `<a href="#${esc(n.id)}">${esc(n.title)}</a>`).join(', ')}</p>` : ''}
+${failedBehaviors.length ? `<p class="alert">${badge('fail')} <strong>A test failed:</strong> ${failedBehaviors.map((n) => `<a href="#${esc(n.id)}">${esc(n.title)}</a>`).join(', ')}. This is not a guess: the test ran on this version of the code and failed.</p>` : ''}
+${contradicted.length ? `<p class="alert">${badge('contradicted')} Assumptions a test proved wrong: ${contradicted.map((n) => `<a href="#${esc(n.id)}">${esc(n.title)}</a>`).join(', ')}</p>` : ''}
 <h2 id="decide">Decisions</h2>
 ${[...pendingDecisions, ...a.decisions.filter((d) => !pendingDecisions.includes(d))].map(decisionCard).join('')}
-<h2 id="behaviors">Expected behaviors</h2>
-${nodes('behavior').map(behaviorCard).join('')}
-<h2 id="consequences">Possible consequences</h2>
-<p class="meta">Possibilities, not facts, unless a captured check says otherwise.</p>
-${nodes('consequence').map((n) => simpleCard(n, badge(n.epistemic))).join('')}
-<h2 id="assumptions">Assumptions</h2>
-${nodes('assumption').map((n) => simpleCard(n, badge(state.assumptions[n.id].status))).join('')}
 <h2 id="questions">Open questions</h2>
 ${nodes('question').map((n) => simpleCard(n, badge(n.epistemic))).join('') || '<p>None.</p>'}
+<h2 id="behaviors">Expected behaviors</h2>
+${[...failedBehaviors, ...nodes('behavior').filter((n) => !failedBehaviors.includes(n))].map(behaviorCard).join('')}
+<h2 id="consequences">Possible consequences</h2>
+<p class="meta">Possibilities, not facts, unless a captured check says otherwise.</p>
+${nodes('consequence').map((n) => simpleCard(n, consequenceBadge(n))).join('')}
+<h2 id="assumptions">Assumptions</h2>
+${nodes('assumption').map((n) => simpleCard(n, badge(state.assumptions[n.id].status))).join('')}
 <h2 id="limits">Scope and limits</h2>
 <ul>${a.scope.limitations.map((l) => `<li>${esc(l)}</li>`).join('')}
 <li>A passing check supports only the criteria it exercises, for the exact code digest shown.</li>
-<li>Decisions are recorded locally without authentication.</li></ul>
+<li>Decisions and evidence are local files without authentication or signatures. Anyone (or any agent) who can write to the <code>.forkfall</code> folder, or whose check commands you run, could forge them.</li></ul>
 </main></body></html>
 `;
 }

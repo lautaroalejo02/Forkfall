@@ -6,6 +6,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { loadAnalysis } from '../../packages/forkfall/lib/analysis.js';
+import { deriveState } from '../../packages/forkfall/lib/state.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const cli = path.resolve(here, '../../packages/forkfall/bin/forkfall.js');
@@ -27,6 +29,11 @@ const setConfig = (ttlMs, invalidateOnRevoke) => {
   fs.writeFileSync(config, `export const cacheConfig = { ttlMs: ${ttlMs}, invalidateOnRevoke: ${invalidateOnRevoke} };\n`);
   console.log(`\n# config.js -> ttlMs: ${ttlMs}, invalidateOnRevoke: ${invalidateOnRevoke}`);
 };
+// The basis a person would copy from the report they just read.
+const basis = (id) => {
+  const ctx = loadAnalysis(analysis);
+  return deriveState(ctx).basisFor(ctx.data.decisions.find((d) => d.id === id)).slice(0, 16);
+};
 const step = (s) => console.log(`\n=== ${s} ===`);
 
 fs.rmSync(path.join(here, '.forkfall'), { recursive: true, force: true });
@@ -37,14 +44,14 @@ try {
   run('report', analysis, '--out', path.join(here, 'report-1-baseline.html'));
 
   step('2. The person answers the revocation question: no residual access');
-  run('decide', analysis, 'd-revocation-policy', 'immediate', '--by', BY, '--note', 'Access must end the moment we revoke it.');
+  run('decide', analysis, 'd-revocation-policy', 'immediate', '--by', BY, '--basis', basis('d-revocation-policy'), '--note', 'Access must end the moment we revoke it.');
 
   step('3. Agent implements invalidation; capture evidence again');
   setConfig(300000, true);
   run('verify', analysis, '--yes');
 
   step('4. Approve the change as shown');
-  run('decide', analysis, 'd-ship', 'approve-scope', '--by', BY);
+  run('decide', analysis, 'd-ship', 'approve-scope', '--by', BY, '--basis', basis('d-ship'));
   run('status', analysis);
   run('report', analysis, '--out', path.join(here, 'report-2-approved.html'));
 

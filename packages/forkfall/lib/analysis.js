@@ -37,7 +37,11 @@ export function loadAnalysis(file) {
   if (errors.length) throw new AnalysisError(errors);
   const dir = path.dirname(abs);
   const root = path.resolve(dir, data.subject.root);
-  if (!isInside(dir, root) && !isInside(findRepoTop(dir), root)) {
+  if (!fs.existsSync(root)) throw new AnalysisError([`subject.root does not exist: ${data.subject.root}`]);
+  // Compare real paths so symlinks and Windows junctions can't smuggle the root outside the repository.
+  const realRoot = fs.realpathSync(root);
+  const top = fs.realpathSync(findRepoTop(dir));
+  if (!isInside(top, realRoot) && !isInside(fs.realpathSync(dir), realRoot)) {
     throw new AnalysisError([`subject.root escapes the repository: ${data.subject.root}`]);
   }
   return { data, file: abs, dir, root, stateDir: path.join(dir, '.forkfall') };

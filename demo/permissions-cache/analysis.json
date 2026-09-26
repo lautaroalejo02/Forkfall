@@ -11,8 +11,8 @@
   "scope": {
     "includedPaths": ["src", "test"],
     "limitations": [
-      "Only the in-process permission checker was examined. Other services that read permissions were not.",
-      "The store is an in-memory stand-in for the real database; production latency and multi-instance behavior were not tested."
+      "Only this app's permission checker was examined. Other services that read permissions were not.",
+      "The database is a stand-in kept in memory. Real database speed, and running more than one copy of the app, were not tested."
     ]
   },
   "nodes": [
@@ -22,7 +22,7 @@
       "actor": "the permissions database",
       "trigger": "the same user asks for the same permission several times within 5 minutes",
       "outcome": "only the first request queries the database; after 5 minutes it is queried again",
-      "acceptance": ["Two checks within the TTL cause exactly one store query", "A check after the TTL expires queries the store again"]
+      "acceptance": ["Two checks within 5 minutes cause exactly one database lookup", "A check after 5 minutes looks up the database again"]
     },
     {
       "id": "b-revocation", "type": "behavior", "origin": "human", "epistemic": "inferred",
@@ -38,7 +38,7 @@
       "actor": "a user in another organization, or another user in the same one",
       "trigger": "they ask for a permission someone else has cached",
       "outcome": "they get their own answer, not the cached one",
-      "acceptance": ["Org A / user 1 does not grant org B / user 1", "Org A / user 1 does not grant org A / user 2", "IDs containing separators cannot collide"]
+      "acceptance": ["Org A / user 1 does not grant org B / user 1", "Org A / user 1 does not grant org A / user 2", "Unusual IDs can never be mistaken for someone else's"]
     },
     {
       "id": "k-residual-access", "type": "consequence", "origin": "agent", "epistemic": "hypothesized",
@@ -83,12 +83,12 @@
     { "from": "b-fewer-queries", "to": "k-memory", "relation": "may_cause", "epistemic": "inferred", "rationale": "Entries are only replaced, never evicted." },
     { "from": "b-revocation", "to": "k-residual-access", "relation": "mitigates", "epistemic": "inferred", "rationale": "Immediate denial removes the window." },
     { "from": "b-revocation", "to": "a-revoke-clears-cache", "relation": "depends_on", "epistemic": "inferred", "rationale": "Immediate denial only happens if revocation clears the cached answer." },
-    { "from": "b-revocation", "to": "a-single-process", "relation": "depends_on", "epistemic": "inferred", "rationale": "The clearing is an in-process event; revocations elsewhere would not trigger it." },
+    { "from": "b-revocation", "to": "a-single-process", "relation": "depends_on", "epistemic": "inferred", "rationale": "The clearing is triggered inside this running copy of the app; revocations made elsewhere would not trigger it." },
     { "from": "q-grant-delay", "to": "k-delayed-grant", "relation": "depends_on", "epistemic": "inferred", "rationale": "Whether this consequence matters depends on the answer." }
   ],
   "checks": [
-    { "id": "c-revocation", "description": "Revoked permission is denied immediately, even within the cache TTL", "cwd": ".", "command": "node --test --test-name-pattern=\"revoked permission is denied immediately\" test/revocation.test.js", "verifies": ["b-revocation"] },
-    { "id": "c-cache", "description": "Cache hits and expiry", "cwd": ".", "command": "node --test test/cache.test.js", "verifies": ["b-fewer-queries"] },
+    { "id": "c-revocation", "description": "A revoked permission is denied at once, even while the old answer is still remembered", "cwd": ".", "command": "node --test --test-name-pattern=\"revoked permission is denied immediately\" test/revocation.test.js", "verifies": ["b-revocation"] },
+    { "id": "c-cache", "description": "Repeated checks are remembered for 5 minutes, then looked up again", "cwd": ".", "command": "node --test test/cache.test.js", "verifies": ["b-fewer-queries"] },
     { "id": "c-isolation", "description": "No leaks between organizations or users", "cwd": ".", "command": "node --test test/isolation.test.js", "verifies": ["b-isolation"] }
   ],
   "claims": [
@@ -101,7 +101,7 @@
       "question": "Can a revoked user keep access until their cached answer expires (up to 5 minutes)?",
       "related": ["k-residual-access", "b-revocation"],
       "options": [
-        { "id": "immediate", "label": "No — revocation must take effect immediately", "consequence": "Revocation clears the cached answer. Slightly more code, and it only works for revocations made through this process (see assumption)." },
+        { "id": "immediate", "label": "No — revocation must take effect immediately", "consequence": "Revocation clears the cached answer. Slightly more code. It only works for revocations made through this running copy of the app (see assumptions)." },
         { "id": "window", "label": "Yes — accept up to 5 minutes of residual access", "consequence": "Simplest. A fired employee could still act for up to 5 minutes." },
         { "id": "no-cache", "label": "Don't cache permissions at all", "consequence": "No risk from caching, but no query savings either." }
       ]
@@ -111,7 +111,8 @@
       "question": "Approve this change for the behaviors, evidence and limits shown here?",
       "related": ["b-fewer-queries", "b-revocation", "b-isolation"],
       "options": [
-        { "id": "approve-scope", "label": "Approve", "consequence": "Approval covers exactly the code digest, analysis and check results in this report. Any change makes it stale." }
+        { "id": "approve-scope", "label": "Approve", "consequence": "Covers exactly the code, analysis and test results in this report. Any later change makes the approval stale." },
+        { "id": "reject", "label": "Reject", "consequence": "The change is not shipped as it stands." }
       ]
     }
   ]

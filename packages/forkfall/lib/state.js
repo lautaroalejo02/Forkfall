@@ -21,32 +21,34 @@ export function canonical(v) {
   return JSON.stringify(v);
 }
 
-// Content hash of every file in scope. Unlike a commit ref, this also covers uncommitted edits.
+// Content hash of everything in scope. Unlike a commit ref, this also covers uncommitted edits.
+// The digest is over a manifest of (path, kind, per-entry hash) so entries cannot be spliced together.
+// Symlinks are recorded by target instead of followed, so they can't point the digest outside the root.
 export function subjectDigest(ctx) {
-  const files = [];
+  const entries = [];
+  const rel = (abs) => path.relative(ctx.root, abs).split(path.sep).join('/');
   const walk = (abs) => {
-    if (!fs.existsSync(abs)) return;
+    if (!fs.existsSync(abs) && !isLink(abs)) return entries.push([rel(abs), 'missing', '']);
     const st = fs.lstatSync(abs);
-    if (st.isSymbolicLink()) return;
+    if (st.isSymbolicLink()) return entries.push([rel(abs), 'link', sha256(fs.readlinkSync(abs))]);
     if (st.isDirectory()) {
       for (const name of fs.readdirSync(abs).sort()) {
-        if (name === 'node_modules' || name === '.git' || name === '.forkfall') continue;
+        if (name === '.git' || name === '.forkfall') continue;
         walk(path.join(abs, name));
       }
-    } else if (st.isFile()) files.push(abs);
+    } else if (st.isFile()) entries.push([rel(abs), 'file', sha256(fs.readFileSync(abs))]);
+    else entries.push([rel(abs), 'other', '']);
   };
   for (const p of ctx.data.scope.includedPaths) {
     const abs = path.resolve(ctx.root, p);
     if (isInside(ctx.root, abs)) walk(abs);
   }
-  const h = crypto.createHash('sha256');
-  for (const f of files.sort()) {
-    h.update(path.relative(ctx.root, f).split(path.sep).join('/'));
-    h.update('\0');
-    h.update(fs.readFileSync(f));
-    h.update('\0');
-  }
-  return { digest: h.digest('hex'), fileCount: files.length };
+  entries.sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0));
+  return { digest: sha256(JSON.stringify(entries)), fileCount: entries.filter((e) => e[1] === 'file').length };
+}
+
+function isLink(abs) {
+  try { return fs.lstatSync(abs).isSymbolicLink(); } catch { return false; }
 }
 
 function git(args, cwd) {
@@ -79,21 +81,27 @@ function writeRecord(dir, prefix, record) {
 // produces evidence with provenance "captured".
 export function captureCheck(ctx, check) {
   const cwd = path.resolve(ctx.root, check.cwd);
-  if (!isInside(ctx.root, cwd)) throw new Error(`check ${check.id}: cwd escapes subject root`);
+  // Resolve links too, so a symlinked or junctioned directory can't move the check outside the root.
+  if (!fs.existsSync(cwd) || !isInside(fs.realpathSync(ctx.root), fs.realpathSync(cwd))) {
+    throw new Error(`check ${check.id}: cwd is missing or escapes subject root`);
+  }
   const subject = subjectDigest(ctx);
   const started = Date.now();
   const r = spawnSync(check.command, { cwd, shell: true, encoding: 'utf8', timeout: CHECK_TIMEOUT_MS });
   const output = redact(`${r.stdout ?? ''}${r.stderr ?? ''}`);
+  // If the code in scope changed while the check ran, the result says nothing about either version.
+  const changedDuringRun = subjectDigest(ctx).digest !== subject.digest;
   const record = {
     kind: 'forkfall.evidence',
     provenance: 'captured',
     checkId: check.id,
+    checkDigest: checkDigest(check),
     verifies: check.verifies,
     command: check.command,
     cwd: check.cwd,
     exitCode: r.status,
     timedOut: r.error?.code === 'ETIMEDOUT',
-    result: r.status === 0 ? 'pass' : 'fail',
+    result: changedDuringRun ? 'inconclusive' : r.status === 0 ? 'pass' : 'fail',
     capturedAt: new Date(started).toISOString(),
     durationMs: Date.now() - started,
     subjectDigest: subject.digest,
@@ -102,13 +110,19 @@ export function captureCheck(ctx, check) {
     environment: { node: process.version, platform: process.platform },
     outputDigest: sha256(output),
     outputTail: output.slice(-OUTPUT_TAIL),
-    limitations: ['Supports only the acceptance criteria this command exercises, in this environment.'],
+    limitations: [
+      'Supports only the acceptance criteria this command exercises, in this environment.',
+      ...(changedDuringRun ? ['Code in scope changed while the check ran; result is inconclusive.'] : []),
+    ],
   };
   const file = writeRecord(path.join(ctx.stateDir, 'evidence'), check.id, record);
   return { record, file };
 }
 
-export function recordDecision(ctx, { decisionId, option, action, by, note }) {
+// Evidence only counts for the exact check definition that produced it.
+export const checkDigest = (c) => sha256(canonical({ id: c.id, command: c.command, cwd: c.cwd, verifies: c.verifies }));
+
+export function recordDecision(ctx, { decisionId, option, action, by, note, basis }) {
   const d = ctx.data.decisions.find((x) => x.id === decisionId);
   if (!d) throw new Error(`unknown decision "${decisionId}"`);
   if (!ACTIONS.includes(action)) throw new Error(`action must be one of ${ACTIONS.join(', ')}`);
@@ -116,6 +130,14 @@ export function recordDecision(ctx, { decisionId, option, action, by, note }) {
     throw new Error(`decision "${decisionId}" has no option "${option}"`);
   }
   const state = deriveState(ctx);
+  // The person must quote the basis shown in the report they read, so an approval can't silently
+  // cover code or evidence that changed after the report was generated.
+  const expected = state.basisFor(d);
+  if (typeof basis !== 'string' || basis.length < 12 || !expected.startsWith(basis)) {
+    const err = new Error(`basis mismatch: the current review basis for "${decisionId}" is ${expected.slice(0, 12)}. Regenerate the report, review it, and pass --basis from it.`);
+    err.code = 'BASIS_MISMATCH';
+    throw err;
+  }
   const record = {
     kind: 'forkfall.decision',
     decisionId,
@@ -140,12 +162,14 @@ export function deriveState(ctx) {
 
   const checks = {};
   for (const c of a.checks) {
-    const mine = evidence.filter((e) => e.checkId === c.id && e.command === c.command)
+    const mine = evidence.filter((e) => e.checkId === c.id && e.checkDigest === checkDigest(c))
       .sort((x, y) => x.capturedAt.localeCompare(y.capturedAt));
     const latest = mine.at(-1) ?? null;
     const current = mine.filter((e) => e.subjectDigest === subject.digest).at(-1) ?? null;
     const status = current ? current.result : latest ? 'outdated' : 'never_run';
-    checks[c.id] = { check: c, status, current, latest, history: mine };
+    // What enters the approval basis: the outcome, not timestamps.
+    const outcome = current ? `${current.result}:${current.exitCode}:${current.timedOut}` : status;
+    checks[c.id] = { check: c, status, outcome, current, latest, history: mine };
   }
 
   const assumptions = {};
@@ -176,7 +200,7 @@ export function deriveState(ctx) {
   const reviewBasisDigest = sha256(canonical({
     analysis: semantic,
     subject: subject.digest,
-    checks: Object.fromEntries(Object.entries(checks).map(([id, c]) => [id, c.status])),
+    checks: Object.fromEntries(Object.entries(checks).map(([id, c]) => [id, c.outcome])),
   }));
   // Policy decisions (basis: "analysis") are about intent, so they only depend on the analysis text.
   const analysisBasisDigest = sha256(canonical({ analysis: semantic }));

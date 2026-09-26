@@ -13,10 +13,12 @@ Usage:
   forkfall status   <analysis.json>
   forkfall verify   <analysis.json> [--check <id>] [--yes]
   forkfall report   <analysis.json> [--out report.html]
-  forkfall decide   <analysis.json> <decisionId> <optionId> --by <name> [--action approve] [--note text]
-  forkfall revoke   <analysis.json> <decisionId> --by <name> [--note text]
+  forkfall decide   <analysis.json> <decisionId> <optionId> --by <name> --basis <digest> [--action approve] [--note text]
+  forkfall revoke   <analysis.json> <decisionId> --by <name> --basis <digest> [--note text]
 
-Exit codes: 0 ok · 1 invalid input or failed check · 2 usage error · 3 decisions pending or stale (status)
+  --basis is the review basis printed on the decision in the report you read.
+
+Exit codes: 0 ok · 1 invalid input, failed check or basis mismatch · 2 usage error · 3 decisions pending or stale (status)
 Actions: ${ACTIONS.join(', ')}`;
 
 function main(argv) {
@@ -25,7 +27,7 @@ function main(argv) {
     allowPositionals: true,
     options: {
       out: { type: 'string' }, check: { type: 'string' }, yes: { type: 'boolean' },
-      by: { type: 'string' }, action: { type: 'string' }, note: { type: 'string' }, help: { type: 'boolean', short: 'h' },
+      by: { type: 'string' }, basis: { type: 'string' }, action: { type: 'string' }, note: { type: 'string' }, help: { type: 'boolean', short: 'h' },
     },
   });
   const [cmd, file, ...rest] = positionals;
@@ -69,7 +71,7 @@ function main(argv) {
       const [decisionId, option] = cmd === 'revoke' ? [rest[0], null] : rest;
       if (!decisionId || (cmd === 'decide' && !option) || !values.by) { console.error(USAGE); return 2; }
       const { record } = recordDecision(ctx, {
-        decisionId, option, action: cmd === 'revoke' ? 'revoke' : (values.action ?? 'approve'), by: values.by, note: values.note,
+        decisionId, option, action: cmd === 'revoke' ? 'revoke' : (values.action ?? 'approve'), by: values.by, note: values.note, basis: values.basis,
       });
       console.log(`recorded ${record.action} on ${decisionId} by ${record.by} (basis ${record.reviewBasisDigest.slice(0, 12)})`);
       return 0;
@@ -86,7 +88,7 @@ function main(argv) {
       let open = 0;
       for (const [id, d] of Object.entries(s.decisions)) {
         if (d.status !== 'current') open++;
-        console.log(`decision   ${id}: ${d.status}${d.latest ? ` (last: ${d.latest.action} ${d.latest.option ?? ''} by ${d.latest.by})` : ''}`);
+        console.log(`decision   ${id}: ${d.status} [basis ${d.basis.slice(0, 12)}]${d.latest ? ` (last: ${d.latest.action} ${d.latest.option ?? ''} by ${d.latest.by})` : ''}`);
       }
       return open ? 3 : 0;
     }

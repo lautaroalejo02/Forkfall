@@ -4,7 +4,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { loadAnalysis, validate, AnalysisError } from '../lib/analysis.js';
-import { captureCheck, deriveState, recordDecision } from '../lib/state.js';
+import { captureCheck, deriveState, recordDecision as record, subjectDigest } from '../lib/state.js';
+
+// Decide the way a person would: quoting the basis currently shown in the report.
+const recordDecision = (ctx, args) => {
+  const d = ctx.data.decisions.find((x) => x.id === args.decisionId);
+  return record(ctx, { basis: d ? deriveState(ctx).basisFor(d) : 'x'.repeat(64), ...args });
+};
 import { renderReport } from '../lib/report.js';
 
 function fixture(mutate = (a) => a) {
@@ -122,4 +128,44 @@ test('decision records cannot reference options that do not exist', () => {
   const f = fixture();
   assert.throws(() => recordDecision(f.ctx(), { decisionId: 'd1', option: 'maybe', action: 'approve', by: 'x' }), /no option/);
   assert.throws(() => recordDecision(f.ctx(), { decisionId: 'nope', option: 'yes', action: 'approve', by: 'x' }), /unknown decision/);
+});
+
+test('a decision must quote the basis of the report the person read', () => {
+  const f = fixture();
+  const seen = deriveState(f.ctx()).basisFor(f.ctx().data.decisions[0]);
+  fs.writeFileSync(path.join(f.dir, 'app', 'src', 'flag.txt'), 'changed after the report');
+  assert.throws(() => record(f.ctx(), { decisionId: 'd1', option: 'yes', action: 'approve', by: 'me', basis: seen }), /basis mismatch/);
+  assert.throws(() => record(f.ctx(), { decisionId: 'd1', option: 'yes', action: 'approve', by: 'me', basis: 'abc' }), /basis mismatch/);
+});
+
+test('redefining a check (e.g. what it verifies) discards its old evidence', () => {
+  const f = fixture();
+  captureCheck(f.ctx(), f.ctx().data.checks[0]);
+  const a = JSON.parse(fs.readFileSync(f.file, 'utf8'));
+  a.checks[0].verifies = ['b2'];
+  fs.writeFileSync(f.file, JSON.stringify(a));
+  const s = deriveState(f.ctx());
+  assert.equal(s.checks.c1.status, 'never_run');
+  assert.equal(s.behaviors.b2.status, 'not_verified');
+});
+
+test('the code digest cannot be forged by splicing file contents together', () => {
+  const f = fixture();
+  const src = path.join(f.dir, 'app', 'src');
+  fs.rmSync(path.join(src, 'flag.txt'));
+  fs.writeFileSync(path.join(src, 'a'), 'X\0b\0Y');
+  const one = subjectDigest(f.ctx()).digest;
+  fs.writeFileSync(path.join(src, 'a'), 'X');
+  fs.writeFileSync(path.join(src, 'b'), 'Y');
+  assert.notEqual(subjectDigest(f.ctx()).digest, one);
+});
+
+test('a check that changes the code while it runs is inconclusive', () => {
+  const f = fixture((a) => {
+    a.checks[0].command = 'node -e "require(\'fs\').writeFileSync(\'src/flag.txt\',\'swapped\')"';
+    return a;
+  });
+  const { record: e } = captureCheck(f.ctx(), f.ctx().data.checks[0]);
+  assert.equal(e.result, 'inconclusive');
+  assert.equal(deriveState(f.ctx()).behaviors.b1.status, 'not_verified');
 });
