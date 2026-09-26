@@ -33,7 +33,8 @@ function killTree(child) {
 
 // Checks out `ref` into a temporary worktree, links node_modules from the main checkout,
 // copies the listed env files, and runs `start` with PORT set.
-async function startOne({ repo, ref, label, start, port, envFiles, log }) {
+// `envFile` (outside the repo) is copied to the worktree as .env.local, so each copy can use its own database.
+async function startOne({ repo, ref, label, start, port, envFiles, envFile, readyTimeoutMs, log }) {
   const dir = path.join(os.tmpdir(), `forkfall-${label}-${crypto.randomBytes(3).toString('hex')}`);
   git(repo, ['worktree', 'add', '--detach', dir, ref]);
   const nm = path.join(repo, 'node_modules');
@@ -41,6 +42,7 @@ async function startOne({ repo, ref, label, start, port, envFiles, log }) {
   for (const f of envFiles) {
     if (fs.existsSync(path.join(repo, f))) fs.copyFileSync(path.join(repo, f), path.join(dir, f));
   }
+  if (envFile) fs.copyFileSync(envFile, path.join(dir, '.env.local'));
   const logFile = path.join(os.tmpdir(), `forkfall-${label}.log`);
   const out = fs.openSync(logFile, 'w');
   const child = spawn(start, {
@@ -49,7 +51,12 @@ async function startOne({ repo, ref, label, start, port, envFiles, log }) {
   });
   const url = `http://127.0.0.1:${port}`;
   log?.(`started ${label} (${ref}) at ${url}, log ${logFile}`);
-  await waitForHttp(url);
+  try {
+    await waitForHttp(url, readyTimeoutMs);
+  } catch (e) {
+    killTree(child);
+    throw new Error(`${e.message}. See ${logFile}`);
+  }
   return {
     url, dir, logFile,
     stop() {
@@ -61,11 +68,18 @@ async function startOne({ repo, ref, label, start, port, envFiles, log }) {
   };
 }
 
-export async function startApps({ repo, base, head, start, port = 4610, envFiles = [], log }) {
+export async function startApps({ repo, base, head, start, port = 4610, envFiles = [], baselineEnv, candidateEnv, readyTimeoutMs = 120_000, log }) {
   const apps = {};
   try {
-    apps.baseline = await startOne({ repo, ref: base, label: 'baseline', start, port, envFiles, log });
-    apps.candidate = await startOne({ repo, ref: head, label: 'candidate', start, port: port + 1, envFiles, log });
+    // Started in parallel: builds can take minutes.
+    const [b, c] = await Promise.allSettled([
+      startOne({ repo, ref: base, label: 'baseline', start, port, envFiles, envFile: baselineEnv, readyTimeoutMs, log }),
+      startOne({ repo, ref: head, label: 'candidate', start, port: port + 1, envFiles, envFile: candidateEnv, readyTimeoutMs, log }),
+    ]);
+    if (b.status === 'fulfilled') apps.baseline = b.value;
+    if (c.status === 'fulfilled') apps.candidate = c.value;
+    if (b.status === 'rejected') throw b.reason;
+    if (c.status === 'rejected') throw c.reason;
   } catch (e) {
     for (const a of Object.values(apps)) a.stop();
     throw e;

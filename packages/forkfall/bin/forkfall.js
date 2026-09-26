@@ -11,11 +11,13 @@ import { renderMap } from '../lib/map.js';
 const USAGE = `forkfall — decide on behavior, not diffs
 
 Usage:
-  forkfall impact   <repo> [--base HEAD~1] [--head HEAD|WORKTREE] [--out impact.json]
+  forkfall impact   <repo> [--base HEAD~1] [--head HEAD|WORKTREE] [--files a.ts,b.ts] [--out impact.json]
+                    --files: predict impact from a plan's files instead of a diff
   forkfall explore  <repo> --start "<command using $PORT>" [--base HEAD~1] [--head HEAD]
                     [--reset-path /__reset] [--scenarios file.json] [--sequences 40] [--steps 8]
                     [--minutes 5] [--seed 1] [--env-file .env] [--lang es|en] [--out-dir dir]
-                    [--intent "what the change is meant to do"]
+                    [--intent "what the change is meant to do"] [--ready-minutes 2]
+                    [--baseline-env file --candidate-env file]  (copied to each copy as .env.local)
                     or, for apps you already run: --candidate-url URL [--baseline-url URL]
   forkfall judge    <run-dir> [--intent "..."] [--lang es|en]   re-judge a run with Jev (needs TYPESAFE_API_KEY)
   forkfall validate <analysis.json>
@@ -45,7 +47,11 @@ async function runExplore(repo, v) {
   let baselineUrl = v['baseline-url'];
   if (!candidateUrl) {
     if (!v.start) { console.error('explore needs --start "<command>" or --candidate-url'); return 2; }
-    apps = await startApps({ repo, base, head, start: v.start, envFiles: v['env-file'] ?? [], log: (m) => console.log(m) });
+    apps = await startApps({
+      repo, base, head, start: v.start, envFiles: v['env-file'] ?? [],
+      baselineEnv: v['baseline-env'], candidateEnv: v['candidate-env'],
+      readyTimeoutMs: Number(v['ready-minutes'] ?? 2) * 60_000, log: (m) => console.log(m),
+    });
     candidateUrl = apps.candidate.url;
     baselineUrl = apps.baseline.url;
   }
@@ -91,8 +97,8 @@ async function judgeRun({ impact, exploration, v, outDir }) {
 `);
   fs.writeFileSync(path.join(outDir, 'map.html'), renderMap({ impact, exploration, lang: v.lang ?? 'en' }));
   console.log(`judged ${usage.requests} finding(s) with Jev (${usage.input_tokens} in / ${usage.output_tokens} out tokens)`);
-  for (const f of exploration.findings.filter((x) => x.judgment?.verdict === 'suspicious')) {
-    console.log(`  SUSPICIOUS ${f.route} (explained ${f.judgment.explainedByIntent.toFixed(2)}, inconsistent ${f.judgment.screenInconsistent.toFixed(2)}): ${f.repro.map((s) => s.text).join(' → ')}`);
+  for (const f of exploration.findings.filter((x) => x.judgment?.verdict === 'suspicious' || x.judgment?.verdict === 'unexplained')) {
+    console.log(`  ${f.judgment.verdict.toUpperCase()} ${f.route} (explained ${f.judgment.explainedByIntent.toFixed(2)}, inconsistent ${f.judgment.screenInconsistent.toFixed(2)}): ${f.repro.map((s) => s.text).join(' → ')}`);
   }
   console.log(`map: ${path.join(outDir, 'map.html')}`);
 }
@@ -102,11 +108,12 @@ async function main(argv) {
     args: argv,
     allowPositionals: true,
     options: {
-      out: { type: 'string' }, base: { type: 'string' }, head: { type: 'string' },
+      out: { type: 'string' }, base: { type: 'string' }, head: { type: 'string' }, files: { type: 'string' },
       start: { type: 'string' }, 'reset-path': { type: 'string' }, scenarios: { type: 'string' },
       sequences: { type: 'string' }, steps: { type: 'string' }, minutes: { type: 'string' }, seed: { type: 'string' },
       'env-file': { type: 'string', multiple: true }, lang: { type: 'string' }, 'out-dir': { type: 'string' },
-      'candidate-url': { type: 'string' }, intent: { type: 'string' }, 'baseline-url': { type: 'string' }, check: { type: 'string' }, yes: { type: 'boolean' },
+      'candidate-url': { type: 'string' }, intent: { type: 'string' },
+      'baseline-env': { type: 'string' }, 'candidate-env': { type: 'string' }, 'ready-minutes': { type: 'string' }, 'baseline-url': { type: 'string' }, check: { type: 'string' }, yes: { type: 'boolean' },
       by: { type: 'string' }, basis: { type: 'string' }, action: { type: 'string' }, note: { type: 'string' }, help: { type: 'boolean', short: 'h' },
     },
   });
@@ -115,7 +122,7 @@ async function main(argv) {
   if (!file) { console.error(USAGE); return 2; }
 
   if (cmd === 'impact') {
-    const result = analyzeImpact({ repo: file, base: values.base ?? 'HEAD~1', head: values.head ?? 'HEAD' });
+    const result = analyzeImpact({ repo: file, base: values.base ?? 'HEAD~1', head: values.head ?? 'HEAD', files: values.files?.split(',').map((f) => f.trim()).filter(Boolean) });
     if (values.out) fs.writeFileSync(values.out, `${JSON.stringify(result, null, 2)}
 `);
     printImpact(result);

@@ -9,13 +9,14 @@ const T = {
     unpredicted: 'Screens static analysis did not predict', confirmed: 'Confirmed problems', confirmedHint: 'Seen happening in the new version and not in the previous one. Each comes with the steps to reproduce it.',
     diffs: 'Behavior differences', diffsHint: 'The new version shows something different from the previous one after the same steps. May be intended.',
     pre: 'Problems that already existed', preHint: 'Also happen in the previous version, so this change did not cause them.',
+    gaps: 'Scenarios that could not finish', gapsHint: 'The explorer could not find a control the scenario asked for, so everything after that step was not tested.',
     unexplored: 'Affected but not explored', unexploredHint: 'Reachable from the change, but exploration never got there. No evidence either way.',
     why: 'Why each screen is affected', limits: 'Limits', steps: 'Steps to reproduce', seen: 'seen', times: 'time(s)', where: 'on',
     added: 'Only in the new version', removed: 'Only in the previous version', none: 'None found.',
     sequences: 'sequences explored', states: 'distinct screen states', screens: 'screens/APIs reachable', changedN: 'files changed', problems: 'confirmed problems', differences: 'differences',
-    confirmedTag: 'CONFIRMED', possibleTag: 'POSSIBLE', suspiciousTag: 'SUSPICIOUS', intendedTag: 'LOOKS INTENDED',
+    confirmedTag: 'CONFIRMED', possibleTag: 'POSSIBLE', suspiciousTag: 'SUSPICIOUS', intendedTag: 'LOOKS INTENDED', unexplainedTag: 'NOT EXPLAINED BY THE CHANGE',
     judged: "Jev's judgment (a judgment, not a verification)", explainedP: 'explained by the change', inconsistentP: 'screen contradicts itself',
-    suspicious: 'Suspicious differences', suspiciousHint: 'Differences Jev judged as not explained by the change, or where the new screen contradicts itself. Check these first.', noEvidence: 'NOT EXPLORED', explored: 'explored', notExplored: 'not explored',
+    suspicious: 'Suspicious differences', suspiciousHint: 'Differences where Jev judged that the new screen contradicts itself. Check these first.', noEvidence: 'NOT EXPLORED', explored: 'explored', notExplored: 'not explored',
     types: { 'js-error': 'JavaScript error', 'server-error': 'Server error', 'http-failure': 'Request failed', dialog: 'Unexpected dialog', 'navigation-differs': 'Goes somewhere else', 'output-differs': 'Shows something different', 'baseline-cannot-follow': 'New or changed controls' },
   },
   es: {
@@ -23,13 +24,14 @@ const T = {
     unpredicted: 'Pantallas que el análisis estático no predijo', confirmed: 'Problemas confirmados', confirmedHint: 'Se vieron pasar en la versión nueva y no en la anterior. Cada uno trae los pasos para reproducirlo.',
     diffs: 'Diferencias de comportamiento', diffsHint: 'Con los mismos pasos, la versión nueva muestra algo distinto que la anterior. Puede ser intencional.',
     pre: 'Problemas que ya existían', preHint: 'También pasan en la versión anterior; este cambio no los causó.',
+    gaps: 'Escenarios que no se pudieron completar', gapsHint: 'El explorador no encontró un control que el escenario pedía, así que lo que venía después no se probó.',
     unexplored: 'Afectadas pero no exploradas', unexploredHint: 'El cambio llega hasta acá, pero la exploración no pasó por estas pantallas. No hay evidencia ni a favor ni en contra.',
     why: 'Por qué cada pantalla está afectada', limits: 'Límites', steps: 'Pasos para reproducirlo', seen: 'visto', times: 'vez/veces', where: 'en',
     added: 'Solo en la versión nueva', removed: 'Solo en la versión anterior', none: 'No se encontró ninguno.',
     sequences: 'secuencias exploradas', states: 'estados de pantalla distintos', screens: 'pantallas/APIs alcanzadas', changedN: 'archivos cambiados', problems: 'problemas confirmados', differences: 'diferencias',
-    confirmedTag: 'CONFIRMADO', possibleTag: 'POSIBLE', suspiciousTag: 'SOSPECHOSO', intendedTag: 'PARECE INTENCIONAL',
+    confirmedTag: 'CONFIRMADO', possibleTag: 'POSIBLE', suspiciousTag: 'SOSPECHOSO', intendedTag: 'PARECE INTENCIONAL', unexplainedTag: 'NO SE EXPLICA POR EL CAMBIO',
     judged: 'Juicio de Jev (es un juicio, no una verificación)', explainedP: 'se explica por el cambio', inconsistentP: 'la pantalla se contradice',
-    suspicious: 'Diferencias sospechosas', suspiciousHint: 'Diferencias que Jev juzgó como no explicadas por el cambio, o donde la pantalla nueva se contradice. Revisá estas primero.', noEvidence: 'SIN EXPLORAR', explored: 'explorada', notExplored: 'sin explorar',
+    suspicious: 'Diferencias sospechosas', suspiciousHint: 'Diferencias donde Jev juzgó que la pantalla nueva se contradice. Revisá estas primero.', noEvidence: 'SIN EXPLORAR', explored: 'explorada', notExplored: 'sin explorar',
     types: { 'js-error': 'Error de JavaScript', 'server-error': 'Error del servidor', 'http-failure': 'Falló un pedido', dialog: 'Diálogo inesperado', 'navigation-differs': 'Lleva a otro lado', 'output-differs': 'Muestra algo distinto', 'baseline-cannot-follow': 'Controles nuevos o cambiados' },
   },
 };
@@ -108,7 +110,7 @@ export function renderMap({ impact, exploration, lang = 'en' }) {
 
   // ---- cards
   const pct = (x) => `${Math.round(x * 100)}%`;
-  const tagFor = (f) => (f.severity >= 2 && !f.preexisting ? ['bad', t.confirmedTag] : suspiciousOf(f) ? ['sus', t.suspiciousTag] : f.judgment?.verdict ? ['warn', t.intendedTag] : ['warn', t.possibleTag]);
+  const tagFor = (f) => (f.severity >= 2 && !f.preexisting ? ['bad', t.confirmedTag] : suspiciousOf(f) ? ['sus', t.suspiciousTag] : f.judgment?.verdict === 'unexplained' ? ['warn', t.unexplainedTag] : f.judgment?.verdict ? ['warn', t.intendedTag] : ['warn', t.possibleTag]);
   const findingCard = (f) => `<article class="card ${f.severity >= 2 && !f.preexisting ? 'bad' : suspiciousOf(f) ? 'sus' : ''}" id="${esc(f.id)}">
     <h3><span class="tag ${tagFor(f)[0]}">${tagFor(f)[1]}</span> ${esc(t.types[f.type])} ${t.where} <code>${esc(f.route)}</code></h3>
     <p>${esc(f.detail)}</p>
@@ -158,6 +160,7 @@ ${suspicious.length ? `<h2 id="suspicious">${t.suspicious}</h2><p class="meta">$
 ${diffs.map(findingCard).join('') || `<p>${t.none}</p>`}
 ${unexplored.length ? `<h2 id="unexplored">${t.unexplored}</h2><p class="meta">${t.unexploredHint}</p><ul>${unexplored.map((e) => `<li><span class="tag warn">${t.noEvidence}</span> <code>${esc(e.route)}</code></li>`).join('')}</ul>` : ''}
 ${pre.length ? `<h2 id="pre">${t.pre}</h2><p class="meta">${t.preHint}</p>${pre.map(findingCard).join('')}` : ''}
+${exploration?.scenarioGaps?.length ? `<h2 id="gaps">${t.gaps}</h2><p class="meta">${t.gapsHint}</p><ul>${exploration.scenarioGaps.map((g) => `<li><strong>${esc(g.scenario)}</strong>: ${esc(g.stoppedAt)} (${g.completedSteps})</li>`).join('')}</ul>` : ''}
 <h2 id="why">${t.why}</h2>
 <ul>${pages.map((e) => `<li><code>${esc(e.route)}</code>${exploration ? ` (${isVisited(e) ? t.explored : t.notExplored})` : ''}: ${e.chain.map((c) => esc(c)).join(' → ')}</li>`).join('')}</ul>
 <h2 id="limits">${t.limits}</h2>

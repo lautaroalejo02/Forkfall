@@ -7,6 +7,15 @@ description: Analyze the consequences of a code change in a web app. Use when th
 
 The CLI lives at `../../packages/forkfall/bin/forkfall.js` relative to this skill's base directory. Call it `FORKFALL` below and run it with `node`. It needs Node 22+ and, for exploration, Playwright's Chromium (`npx playwright install chromium` inside `packages/forkfall` if missing).
 
+## 0. Starting from a plan (before any code exists)
+
+If the user gives a plan instead of a finished change, predict first and verify later:
+
+1. Read the plan and the code; list the files the plan will most likely touch.
+2. `node FORKFALL impact <repo> --files <comma-separated files>` shows the screens and APIs those files reach.
+3. Write the risky scenarios now (step 2 below) and save them next to the plan. Optionally run them against the current app (`explore --candidate-url <running app>` without a baseline) to record today's behavior.
+4. After the plan is implemented, run step 3 on the resulting commit with the same scenarios. Tell the user which predicted screens were really affected, which were not, and what showed up that the plan did not predict.
+
 ## 1. Find what the change can reach (static, safe)
 
 Pick the change: the last commit by default (`--base HEAD~1 --head HEAD`), a branch (`--base main`), or uncommitted work (`--head WORKTREE`).

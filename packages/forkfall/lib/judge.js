@@ -66,7 +66,8 @@ export async function judgeFindings({ exploration, impact, intent, apiKey, log =
         model: r.model,
         explainedByIntent: explained,
         screenInconsistent: inconsistent,
-        verdict: inconsistent >= 0.5 || explained < 0.5 ? 'suspicious' : 'likely-intended',
+        // Self-contradiction is the strong signal. "Not explained" alone may be noise or a side effect.
+        verdict: inconsistent >= 0.5 ? 'suspicious' : explained < 0.4 ? 'unexplained' : 'likely-intended',
       };
     } catch (e) {
       f.judgment = { error: e.message };

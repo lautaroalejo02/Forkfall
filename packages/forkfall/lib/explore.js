@@ -3,7 +3,7 @@
 // Every finding carries the exact steps that reproduce it.
 import crypto from 'node:crypto';
 
-const DEFAULTS = { sequences: 40, maxSteps: 8, timeMs: 5 * 60_000, settleMs: 2500, seed: 1 };
+const DEFAULTS = { sequences: 40, maxSteps: 8, timeMs: 5 * 60_000, settleMs: 2500, seed: 1, waitForMs: 15_000 };
 
 function rng(seed) {
   let a = seed >>> 0;
@@ -127,10 +127,18 @@ async function openSession(browser, baseUrl) {
   return { context, page, events };
 }
 
+// Waits until the visible text stops changing (apps that poll never reach "network idle").
 async function settle(page, ms) {
   await page.waitForLoadState('load', { timeout: ms }).catch(() => {});
-  await page.waitForLoadState('networkidle', { timeout: ms }).catch(() => {});
-  await page.waitForTimeout(100);
+  const until = Date.now() + ms * 2;
+  let last = null;
+  let stableSince = Date.now();
+  while (Date.now() < until) {
+    const now = await page.evaluate(() => document.body?.innerText.length + ':' + document.body?.innerText.slice(0, 2000)).catch(() => null);
+    if (now !== last) { last = now; stableSince = Date.now(); }
+    else if (Date.now() - stableSince >= 600) return;
+    await page.waitForTimeout(150);
+  }
 }
 
 async function observe(page, events, since) {
@@ -259,6 +267,12 @@ async function runSequence(browser, url, cfg, { start, plan, scenario, rand, sta
       if (plan) step = plan[i];
       else if (scenario) {
         step = resolveScenarioStep(scenario.steps[i - 1], obs.actions);
+        // Apps often reveal the next control only after an async reply; wait before giving up.
+        for (const until = Date.now() + cfg.waitForMs; !step && Date.now() < until;) {
+          await page.waitForTimeout(1000);
+          obs = await observe(page, events, since);
+          step = resolveScenarioStep(scenario.steps[i - 1], obs.actions);
+        }
         if (!step) { steps.push({ action: { kind: 'note' }, note: `Scenario step not found: ${JSON.stringify(scenario.steps[i - 1])}` }); break; }
       } else {
         seen.states++;
@@ -300,7 +314,7 @@ const multisetDiff = (a, b) => {
   return out;
 };
 
-function compare(cand, base) {
+function compare(cand, base, noise = new Set()) {
   const findings = [];
   const n = Math.min(cand.length, base.length);
   for (let i = 0; i < cand.length; i++) {
@@ -321,8 +335,8 @@ function compare(cand, base) {
     if (b && c.route !== b.route) {
       findings.push({ type: 'navigation-differs', step: i, route: c.route, detail: `Candidate is on ${c.route}, baseline on ${b.route}` });
     } else if (b) {
-      const added = multisetDiff(c.text, b.text);
-      const removed = multisetDiff(b.text, c.text);
+      const added = multisetDiff(c.text, b.text).filter((l) => !noise.has(l));
+      const removed = multisetDiff(b.text, c.text).filter((l) => !noise.has(l));
       if (added.length || removed.length) {
         findings.push({ type: 'output-differs', step: i, route: c.route, detail: 'Visible text differs from the baseline', added: added.slice(0, 12), removed: removed.slice(0, 12) });
       }
@@ -342,6 +356,9 @@ export async function explore({ candidateUrl, baselineUrl, focusRoutes = [], sta
   const seen = { states: 0, keys: new Map(), routes: new Set() };
   const focusUrls = new Set(); // real URLs (with query) that landed on an affected screen
   const trace = [];
+  const noise = new Set();     // text lines seen to change between two runs of the same version
+  const noisyNav = new Set();
+  const envDiff = new Set();   // lines that differ between the two environments before any action
   const deadline = Date.now() + cfg.timeMs;
   const findings = new Map();
   const visited = new Set();
@@ -363,6 +380,17 @@ export async function explore({ candidateUrl, baselineUrl, focusRoutes = [], sta
   };
 
   try {
+    // Environment calibration: open each start page on both versions before any action.
+    // Lines that already differ there come from data or configuration, not from the change.
+    if (baselineUrl) {
+      const starts = [...new Set(['/', ...startPaths, ...scenarios.map((s) => s.start ?? '/')])].slice(0, 12);
+      for (const start of starts) {
+        const [c] = await runSequence(browser, candidateUrl, cfg, { start, plan: [{ kind: 'goto', path: start }], rand, stats: new Map(), focusRoutes });
+        const [b] = await runSequence(browser, baselineUrl, cfg, { start, plan: [{ kind: 'goto', path: start }], rand, stats: new Map(), focusRoutes });
+        for (const line of [...multisetDiff(c.text ?? [], b.text ?? []), ...multisetDiff(b.text ?? [], c.text ?? [])]) { noise.add(line); envDiff.add(line); }
+      }
+      log(`environment calibration: ${envDiff.size} line(s) already differ before any action`);
+    }
     const plans = [
       ...scenarios.map((s) => ({ scenario: s, start: s.start ?? '/' })),
       ...Array.from({ length: cfg.sequences }, () => null),
@@ -383,6 +411,15 @@ export async function explore({ candidateUrl, baselineUrl, focusRoutes = [], sta
         const plan = cand.filter((s) => s.action.kind !== 'note' && !s.missing).map((s) => s.action);
         const base = await runSequence(browser, baselineUrl, cfg, { start, plan, rand, stats: new Map(), focusRoutes });
         fs_ = compare(cand, base);
+        if (fs_.some((f) => f.type === 'output-differs' || f.type === 'navigation-differs')) {
+          // Run the baseline again: whatever differs between two runs of the same version is noise.
+          const again = await runSequence(browser, baselineUrl, cfg, { start, plan, rand, stats: new Map(), focusRoutes });
+          for (let i = 0; i < Math.min(base.length, again.length); i++) {
+            for (const line of [...multisetDiff(base[i].text ?? [], again[i].text ?? []), ...multisetDiff(again[i].text ?? [], base[i].text ?? [])]) noise.add(line);
+            if (base[i].route !== again[i].route) noisyNav.add(i === 0 ? start : JSON.stringify(plan.slice(0, i + 1)));
+          }
+          fs_ = compare(cand, base, noise).filter((f) => !(f.type === 'navigation-differs' && noisyNav.has(f.step === 0 ? start : JSON.stringify(plan.slice(0, f.step + 1)))));
+        }
       } else {
         fs_ = compare(cand, cand.map((s) => ({ ...s, events: [] })));
         fs_ = fs_.filter((f) => f.type !== 'output-differs');
@@ -407,10 +444,13 @@ export async function explore({ candidateUrl, baselineUrl, focusRoutes = [], sta
       focusUrls: [...focusUrls].slice(0, 50),
     },
     findings: list,
-    trace: cfg.trace ? trace : undefined,
+    noise: { lines: noise.size, sample: [...noise].slice(0, 20), environment: [...envDiff].slice(0, 20) },
+    trace,
+    scenarioGaps: trace.filter((t) => t.origin !== 'generated').map((t) => ({ scenario: t.origin, completedSteps: t.steps.length - 1, stoppedAt: t.steps.find((s) => s.text?.startsWith('Scenario step not found'))?.text ?? null })).filter((g) => g.stoppedAt),
     limitations: [
       `Explored ${sequences} sequence(s) of up to ${cfg.maxSteps} steps; paths beyond that were not tried.`,
       'A difference from the baseline can be intended. Errors that also happen on the baseline are marked as pre-existing.',
+      ...(envDiff.size ? [`${envDiff.size} line(s) already differed between the two environments before any action (data or configuration) and were ignored, e.g. "${[...envDiff][0].slice(0, 80)}".`] : []),
     ],
   };
 }

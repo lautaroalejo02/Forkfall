@@ -193,12 +193,16 @@ function parseDiff(diffText) {
   return files;
 }
 
-export function analyzeImpact({ repo, base = 'HEAD~1', head = 'HEAD', maxDepth = 12 }) {
+// With `files` (a plan's predicted files), impact is computed on the current tree without a diff.
+export function analyzeImpact({ repo, base = 'HEAD~1', head = 'HEAD', files: planned, maxDepth = 12 }) {
   repo = path.resolve(repo);
+  if (planned) head = 'WORKTREE';
   const worktree = head === 'WORKTREE';
   const range = worktree ? [base] : [base, head];
-  const nameStatus = git(repo, ['diff', '--name-status', '-M', ...range]).trim().split('\n').filter(Boolean);
-  const hunks = parseDiff(git(repo, ['diff', '-U0', ...range]));
+  const nameStatus = planned
+    ? planned.map((f) => `${fs.existsSync(path.join(repo, f)) ? 'M' : 'A'}\t${posix(f)}`)
+    : git(repo, ['diff', '--name-status', '-M', ...range]).trim().split('\n').filter(Boolean);
+  const hunks = planned ? new Map() : parseDiff(git(repo, ['diff', '-U0', ...range]));
   const readAtHead = (f) => {
     if (worktree) return fs.existsSync(path.join(repo, f)) ? fs.readFileSync(path.join(repo, f), 'utf8') : '';
     const r = spawnSync('git', ['show', `${head}:${f}`], { cwd: repo, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
@@ -283,8 +287,8 @@ export function analyzeImpact({ repo, base = 'HEAD~1', head = 'HEAD', maxDepth =
       // A layout affects every page under it.
       for (const g of files) {
         const p = classifyEntry(g);
-        if (p?.kind === 'page' && (p.route + '/').startsWith(e.route === '/' ? '/' : `${e.route}/`) && !seen.has(p.route)) {
-          seen.add(p.route);
+        if (p?.kind === 'page' && (p.route + '/').startsWith(e.route === '/' ? '/' : `${e.route}/`) && !seen.has(`page ${p.route}`)) {
+          seen.add(`page ${p.route}`);
           entries.push({ ...p, chain: [...chain, `(layout wraps) ${g}`], distance: chain.length });
         }
       }
@@ -306,9 +310,10 @@ export function analyzeImpact({ repo, base = 'HEAD~1', head = 'HEAD', maxDepth =
     kind: 'forkfall.impact',
     repo: posix(repo),
     base, head,
-    baseCommit: git(repo, ['rev-parse', base]).trim(),
+    baseCommit: git(repo, ['rev-parse', planned ? 'HEAD' : base]).trim(),
     headCommit: worktree ? null : git(repo, ['rev-parse', head]).trim(),
-    message: worktree ? '(uncommitted changes)' : git(repo, ['log', '-1', '--format=%s', head]).trim(),
+    mode: planned ? 'plan' : 'diff',
+    message: planned ? '(planned change)' : worktree ? '(uncommitted changes)' : git(repo, ['log', '-1', '--format=%s', head]).trim(),
     graph: { files: files.length, edges: [...deps.values()].reduce((n, s) => n + s.size, 0), aliases: aliases.map((a) => a.prefix) },
     changed,
     affectedFiles: [...via.entries()].map(([file, chain]) => ({ file, chain })),
