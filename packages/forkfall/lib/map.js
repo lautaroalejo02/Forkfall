@@ -9,6 +9,7 @@ const T = {
     unpredicted: 'Screens static analysis did not predict', confirmed: 'Confirmed problems', confirmedHint: 'Seen happening in the new version and not in the previous one. Each comes with the steps to reproduce it.',
     diffs: 'Behavior differences', diffsHint: 'The new version shows something different from the previous one after the same steps. May be intended.',
     pre: 'Problems that already existed', preHint: 'Also happen in the previous version, so this change did not cause them.',
+    divergedHint: 'The previous version could not perform a step the new one did, so comparison stopped there. Often a new or renamed control; otherwise a regression in the previous flow.',
     gaps: 'Scenarios that could not finish', gapsHint: 'The explorer could not find a control the scenario asked for, so everything after that step was not tested.',
     unexplored: 'Affected but not explored', unexploredHint: 'Reachable from the change, but exploration never got there. No evidence either way.',
     why: 'Why each screen is affected', limits: 'Limits', steps: 'Steps to reproduce', seen: 'seen', times: 'time(s)', where: 'on',
@@ -24,6 +25,7 @@ const T = {
     unpredicted: 'Pantallas que el análisis estático no predijo', confirmed: 'Problemas confirmados', confirmedHint: 'Se vieron pasar en la versión nueva y no en la anterior. Cada uno trae los pasos para reproducirlo.',
     diffs: 'Diferencias de comportamiento', diffsHint: 'Con los mismos pasos, la versión nueva muestra algo distinto que la anterior. Puede ser intencional.',
     pre: 'Problemas que ya existían', preHint: 'También pasan en la versión anterior; este cambio no los causó.',
+    divergedHint: 'La versión anterior no pudo hacer un paso que la nueva sí, así que la comparación se cortó ahí. Suele ser un control nuevo o renombrado.',
     gaps: 'Escenarios que no se pudieron completar', gapsHint: 'El explorador no encontró un control que el escenario pedía, así que lo que venía después no se probó.',
     unexplored: 'Afectadas pero no exploradas', unexploredHint: 'El cambio llega hasta acá, pero la exploración no pasó por estas pantallas. No hay evidencia ni a favor ni en contra.',
     why: 'Por qué cada pantalla está afectada', limits: 'Límites', steps: 'Pasos para reproducirlo', seen: 'visto', times: 'vez/veces', where: 'en',
@@ -48,6 +50,7 @@ export function renderMap({ impact, exploration, lang = 'en' }) {
   const suspicious = allDiffs.filter(suspiciousOf).sort(byRisk);
   const diffs = allDiffs.filter((f) => !suspiciousOf(f));
   const pre = findings.filter((f) => f.preexisting);
+  const diverged = findings.filter((f) => f.type === 'baseline-cannot-follow');
   const pages = impact.entries;
   const visited = new Set((exploration?.coverage.routesVisited ?? []).map(routeKey));
   const isVisited = (e) => visited.has(routeKey(e.route));
@@ -160,6 +163,7 @@ ${suspicious.length ? `<h2 id="suspicious">${t.suspicious}</h2><p class="meta">$
 ${diffs.map(findingCard).join('') || `<p>${t.none}</p>`}
 ${unexplored.length ? `<h2 id="unexplored">${t.unexplored}</h2><p class="meta">${t.unexploredHint}</p><ul>${unexplored.map((e) => `<li><span class="tag warn">${t.noEvidence}</span> <code>${esc(e.route)}</code></li>`).join('')}</ul>` : ''}
 ${pre.length ? `<h2 id="pre">${t.pre}</h2><p class="meta">${t.preHint}</p>${pre.map(findingCard).join('')}` : ''}
+${diverged.length ? `<h2 id="diverged">${t.types['baseline-cannot-follow']}</h2><p class="meta">${t.divergedHint}</p>${diverged.map(findingCard).join('')}` : ''}
 ${exploration?.scenarioGaps?.length ? `<h2 id="gaps">${t.gaps}</h2><p class="meta">${t.gapsHint}</p><ul>${exploration.scenarioGaps.map((g) => `<li><strong>${esc(g.scenario)}</strong>: ${esc(g.stoppedAt)} (${g.completedSteps})</li>`).join('')}</ul>` : ''}
 <h2 id="why">${t.why}</h2>
 <ul>${pages.map((e) => `<li><code>${esc(e.route)}</code>${exploration ? ` (${isVisited(e) ? t.explored : t.notExplored})` : ''}: ${e.chain.map((c) => esc(c)).join(' → ')}</li>`).join('')}</ul>

@@ -61,9 +61,23 @@ async function startOne({ repo, ref, label, start, port, envFiles, envFile, read
     url, dir, logFile,
     stop() {
       killTree(child);
+      // node_modules is a link to the real checkout's packages. Remove only the link, and never
+      // delete the worktree while it still exists: a recursive delete could follow it.
       const nmLink = path.join(dir, 'node_modules');
-      try { if (fs.lstatSync(nmLink).isSymbolicLink()) fs.unlinkSync(nmLink); } catch { /* none */ }
-      spawnSync('git', ['worktree', 'remove', '--force', dir], { cwd: repo });
+      if (fs.existsSync(nmLink)) {
+        if (process.platform === 'win32') spawnSync('cmd', ['/c', 'rmdir', nmLink]); // junction: removes the link only
+        else if (fs.lstatSync(nmLink).isSymbolicLink()) fs.unlinkSync(nmLink);
+      }
+      if (fs.existsSync(nmLink)) {
+        log?.(`left ${dir} in place: could not unlink its node_modules link safely`);
+        return;
+      }
+      for (let i = 0; i < 5; i++) {
+        const r = spawnSync('git', ['worktree', 'remove', '--force', dir], { cwd: repo });
+        if (r.status === 0 || !fs.existsSync(dir)) break;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000); // processes may still hold files
+      }
+      spawnSync('git', ['worktree', 'prune'], { cwd: repo });
     },
   };
 }

@@ -286,6 +286,12 @@ async function runSequence(browser, url, cfg, { start, plan, scenario, rand, sta
       let outcome = 'ok';
       try {
         outcome = (await perform(page, step, obs.actions)) ?? 'ok';
+        // Replays wait for late controls exactly like scenarios do, or async UIs look like divergence.
+        for (const until = Date.now() + cfg.waitForMs; outcome === 'missing' && Date.now() < until;) {
+          await page.waitForTimeout(1000);
+          obs = await observe(page, events, since);
+          outcome = (await perform(page, step, obs.actions)) ?? 'ok';
+        }
       } catch (e) {
         outcome = `failed: ${String(e.message).split('\n')[0].slice(0, 200)}`;
       }
@@ -432,6 +438,19 @@ export async function explore({ candidateUrl, baselineUrl, focusRoutes = [], sta
     await browser.close();
   }
 
+  // A line that differs on 3+ different screens belongs to something shared by all of them
+  // (a live feed, a header counter), not to one screen's behavior. Set those lines aside.
+  const routesByLine = new Map();
+  for (const f of findings.values()) {
+    for (const l of [...(f.added ?? []), ...(f.removed ?? [])]) (routesByLine.get(l) ?? routesByLine.set(l, new Set()).get(l)).add(f.route);
+  }
+  const shared = new Set([...routesByLine].filter(([, r]) => r.size >= 3).map(([l]) => l));
+  for (const [sig, f] of findings) {
+    if (f.type !== 'output-differs' || !shared.size) continue;
+    f.added = f.added.filter((l) => !shared.has(l));
+    f.removed = f.removed.filter((l) => !shared.has(l));
+    if (!f.added.length && !f.removed.length) findings.delete(sig);
+  }
   const list = [...findings.values()].sort((a, b) => b.severity - a.severity || a.repro.length - b.repro.length);
   return {
     kind: 'forkfall.exploration',
@@ -444,12 +463,13 @@ export async function explore({ candidateUrl, baselineUrl, focusRoutes = [], sta
       focusUrls: [...focusUrls].slice(0, 50),
     },
     findings: list,
-    noise: { lines: noise.size, sample: [...noise].slice(0, 20), environment: [...envDiff].slice(0, 20) },
+    noise: { lines: noise.size, sample: [...noise].slice(0, 20), environment: [...envDiff].slice(0, 20), sharedAcrossScreens: [...shared].slice(0, 20) },
     trace,
     scenarioGaps: trace.filter((t) => t.origin !== 'generated').map((t) => ({ scenario: t.origin, completedSteps: t.steps.length - 1, stoppedAt: t.steps.find((s) => s.text?.startsWith('Scenario step not found'))?.text ?? null })).filter((g) => g.stoppedAt),
     limitations: [
       `Explored ${sequences} sequence(s) of up to ${cfg.maxSteps} steps; paths beyond that were not tried.`,
       'A difference from the baseline can be intended. Errors that also happen on the baseline are marked as pre-existing.',
+      ...(shared.size ? [`${shared.size} line(s) differed on 3 or more screens (shared panels such as live feeds) and were set aside, e.g. "${[...shared][0].slice(0, 80)}".`] : []),
       ...(envDiff.size ? [`${envDiff.size} line(s) already differed between the two environments before any action (data or configuration) and were ignored, e.g. "${[...envDiff][0].slice(0, 80)}".`] : []),
     ],
   };

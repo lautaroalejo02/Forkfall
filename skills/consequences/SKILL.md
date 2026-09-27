@@ -38,6 +38,8 @@ Think like a tester who knows what changed. List 3–10 short user journeys (2�
 ]
 ```
 
+Reach the changed screen first. At least two scenarios must follow the normal, valid path all the way to the screen or state the change touches (valid prices, required fields filled, waiting for replies); only then try edge values or odd navigation *on that screen*. A scenario that starts with an invalid value usually never gets there, and tests nothing about the change.
+
 Step forms: `{ "goto": "/path" }`, `{ "click": "visible label" }`, `{ "fill": "field label", "value": "..." }`, `{ "select": "field label", "value": "option value" }`, `{ "fillAll": true }` (fills every empty field with a valid value). Scenarios are hypotheses: the explorer runs them and reports what really happens.
 
 ## 3. Explore both versions
@@ -53,6 +55,8 @@ node FORKFALL explore <repo> --base <ref> --head <ref> --start "<command that ho
 It checks out both versions into temporary worktrees, starts them, runs your scenarios and then generated sequences (biased toward the affected screens) on the new version, and replays each sequence on the old one. If the user already runs both versions, pass `--candidate-url` and `--baseline-url` instead of `--start`.
 
 Optional: if `TYPESAFE_API_KEY` is set, every difference is judged by TypeSafe's Jev: is it explained by the change's intent (pass `--intent "..."` with the user's own words when you have them), and does the new screen contradict itself? Suspicious differences are listed first. `node FORKFALL judge <run-dir>` re-judges a finished run without exploring again.
+
+Then read `exploration.json` → `scenarioGaps` and `trace`: each scenario that could not finish shows the step it stopped at. Fix those scenarios (a label that differs, a missing prerequisite step, a reply that takes longer) and run again. Don't report a screen as tested if no scenario reached it.
 
 ## 4. Report
 
