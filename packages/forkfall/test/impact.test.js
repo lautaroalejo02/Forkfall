@@ -40,3 +40,12 @@ test('classifies Next.js and static entry points', () => {
   assert.equal(classifyEntry('public/cart.html').route, '/cart.html');
   assert.equal(classifyEntry('src/lib/util.ts'), null);
 });
+
+test('a reordering is a difference: the window where two orderings disagree', async () => {
+  const { orderWindow } = await import('../lib/explore.js');
+  assert.equal(orderWindow(['h', 'a', 'b', 'c', 'f'], ['h', 'a', 'b', 'c', 'f']), null);
+  assert.deepEqual(orderWindow(['h', 'Notebook $9.50', 'Mug $18.00', 'Tote $24.00', 'f'], ['h', 'Mug $18.00', 'Tote $24.00', 'Notebook $9.50', 'f']), {
+    before: ['Notebook $9.50', 'Mug $18.00', 'Tote $24.00'],
+    after: ['Mug $18.00', 'Tote $24.00', 'Notebook $9.50'],
+  });
+});

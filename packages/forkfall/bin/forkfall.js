@@ -24,6 +24,8 @@ Usage:
                     [--baseline-env file --candidate-env file]  (copied to each copy as .env.local)
                     [--record 3]  record side-by-side replays of the top findings (0 = off)
                     [--expect expected.json]  check every difference against a plan's expected changes
+                    [--calibrate-env]  ignore lines that already differ before any action (data drift);
+                                       can hide real changes visible on load
                     or, for apps you already run: --candidate-url URL [--baseline-url URL]
   forkfall judge    <run-dir> [--intent "..."] [--lang es|en]   re-judge a run with Jev (needs TYPESAFE_API_KEY)
   forkfall validate <analysis.json>
@@ -78,7 +80,7 @@ async function runExplore(repo, v) {
       scenarios: v.scenarios ? JSON.parse(fs.readFileSync(v.scenarios, 'utf8')) : [],
       resetPath: v['reset-path'],
       sequences: Number(v.sequences ?? 40), maxSteps: Number(v.steps ?? 8),
-      timeMs: Number(v.minutes ?? 5) * 60_000, seed: Number(v.seed ?? 1),
+      timeMs: Number(v.minutes ?? 5) * 60_000, seed: Number(v.seed ?? 1), calibrateEnv: !!v['calibrate-env'],
       log: (m) => console.log(m),
     });
     // Judge and record while both apps are still running: recording replays the steps.
@@ -203,7 +205,7 @@ async function main(argv) {
       sequences: { type: 'string' }, steps: { type: 'string' }, minutes: { type: 'string' }, seed: { type: 'string' },
       'env-file': { type: 'string', multiple: true }, lang: { type: 'string' }, 'out-dir': { type: 'string' },
       'candidate-url': { type: 'string' }, intent: { type: 'string' },
-      'baseline-env': { type: 'string' }, record: { type: 'string' }, expect: { type: 'string' }, force: { type: 'boolean' }, 'no-open': { type: 'boolean' }, 'allow-shared-db': { type: 'boolean' },
+      'baseline-env': { type: 'string' }, record: { type: 'string' }, expect: { type: 'string' }, force: { type: 'boolean' }, 'calibrate-env': { type: 'boolean' }, 'no-open': { type: 'boolean' }, 'allow-shared-db': { type: 'boolean' },
       'candidate-env': { type: 'string' }, 'ready-minutes': { type: 'string' }, 'baseline-url': { type: 'string' }, check: { type: 'string' }, yes: { type: 'boolean' },
       by: { type: 'string' }, basis: { type: 'string' }, action: { type: 'string' }, note: { type: 'string' }, help: { type: 'boolean', short: 'h' },
     },

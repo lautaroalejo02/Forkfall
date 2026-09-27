@@ -183,7 +183,9 @@ export async function observe(page, events, since) {
         .map((el) => {
           const label = el.getAttribute('aria-label') || (el.id && document.querySelector(`label[for="${CSS.escape(el.id)}"]`)?.innerText) || el.name || el.placeholder || el.type;
           const value = el.type === 'checkbox' || el.type === 'radio' ? (el.checked ? 'checked' : 'unchecked') : el.value;
-          return `[field] ${String(label).replace(/\s+/g, ' ').trim()}: ${value}`;
+          // The browser's own validation bubble is not page text; report it with the field.
+          const invalid = el.validity && !el.validity.valid && el.validationMessage ? ` (invalid: ${el.validationMessage})` : '';
+          return `[field] ${String(label).replace(/\s+/g, ' ').trim()}: ${value}${invalid}`;
         });
       return `${document.body?.innerText ?? ''}\n${fields.join('\n')}`;
     }));
@@ -353,7 +355,19 @@ const multisetDiff = (a, b) => {
   return out;
 };
 
-function compare(cand, base, noise = new Set()) {
+// The stretch where two orderings of the same lines disagree, e.g. before [A, B, C] vs after [B, C, A].
+export function orderWindow(before, after) {
+  if (before.length !== after.length) return null;
+  let i = 0;
+  while (i < before.length && before[i] === after[i]) i++;
+  if (i === before.length) return null;
+  let j = before.length - 1;
+  while (j > i && before[j] === after[j]) j--;
+  return { before: before.slice(i, Math.min(j + 1, i + 12)), after: after.slice(i, Math.min(j + 1, i + 12)) };
+}
+
+// orderNoise: step indexes where two runs of the baseline itself showed a different order.
+function compare(cand, base, noise = new Set(), orderNoise = new Set()) {
   const findings = [];
   const n = Math.min(cand.length, base.length);
   for (let i = 0; i < cand.length; i++) {
@@ -379,13 +393,19 @@ function compare(cand, base, noise = new Set()) {
       const removed = multisetDiff(b.text, c.text).filter((l) => !noise.has(l));
       if (added.length || removed.length) {
         findings.push({ type: 'output-differs', step: i, route: c.route, detail: 'Visible text differs from the baseline', added: added.slice(0, 12), removed: removed.slice(0, 12) });
+      } else if (!orderNoise.has(i)) {
+        // Same lines, different order (e.g. a sort that now sorts wrong) is still a difference.
+        const cs = c.text.filter((l) => !noise.has(l));
+        const bs = b.text.filter((l) => !noise.has(l));
+        const window = orderWindow(bs, cs);
+        if (window) findings.push({ type: 'order-differs', step: i, route: c.route, detail: 'Same content, in a different order', added: window.after, removed: window.before });
       }
     }
   }
   return findings;
 }
 
-const SEVERITY = { arithmetic: 3, 'js-error': 3, 'server-error': 3, 'http-failure': 2, dialog: 1, 'navigation-differs': 2, 'output-differs': 1, 'baseline-cannot-follow': 0 };
+const SEVERITY = { arithmetic: 3, 'js-error': 3, 'server-error': 3, 'http-failure': 2, dialog: 1, 'navigation-differs': 2, 'output-differs': 1, 'order-differs': 1, 'baseline-cannot-follow': 0 };
 
 export async function explore({ candidateUrl, baselineUrl, focusRoutes = [], startPaths = ['/'], scenarios = [], log = () => {}, ...opts }) {
   const cfg = { ...DEFAULTS, ...opts };
@@ -423,7 +443,9 @@ export async function explore({ candidateUrl, baselineUrl, focusRoutes = [], sta
   try {
     // Environment calibration: open each start page on both versions before any action.
     // Lines that already differ there come from data or configuration, not from the change.
-    if (baselineUrl) {
+    // Off by default: comparing the two versions before any action cannot tell data drift from
+    // real changes visible on load, so it can hide exactly what we are looking for.
+    if (baselineUrl && cfg.calibrateEnv) {
       const starts = [...new Set(['/', ...startPaths, ...scenarios.map((s) => s.start ?? '/')])].slice(0, 12);
       for (const start of starts) {
         const [c] = await runSequence(browser, candidateUrl, cfg, { start, plan: [{ kind: 'goto', path: start }], rand, stats: new Map(), focusRoutes });
@@ -452,14 +474,16 @@ export async function explore({ candidateUrl, baselineUrl, focusRoutes = [], sta
         const plan = cand.filter((s) => s.action.kind !== 'note' && !s.missing).map((s) => s.action);
         const base = await runSequence(browser, baselineUrl, cfg, { start, plan, rand, stats: new Map(), focusRoutes });
         fs_ = compare(cand, base);
-        if (fs_.some((f) => f.type === 'output-differs' || f.type === 'navigation-differs')) {
+        if (fs_.some((f) => ['output-differs', 'navigation-differs', 'order-differs'].includes(f.type))) {
           // Run the baseline again: whatever differs between two runs of the same version is noise.
           const again = await runSequence(browser, baselineUrl, cfg, { start, plan, rand, stats: new Map(), focusRoutes });
+          const orderNoise = new Set();
           for (let i = 0; i < Math.min(base.length, again.length); i++) {
             for (const line of [...multisetDiff(base[i].text ?? [], again[i].text ?? []), ...multisetDiff(again[i].text ?? [], base[i].text ?? [])]) noise.add(line);
             if (base[i].route !== again[i].route) noisyNav.add(i === 0 ? start : JSON.stringify(plan.slice(0, i + 1)));
+            if (orderWindow(base[i].text ?? [], again[i].text ?? [])) orderNoise.add(i);
           }
-          fs_ = compare(cand, base, noise).filter((f) => !(f.type === 'navigation-differs' && noisyNav.has(f.step === 0 ? start : JSON.stringify(plan.slice(0, f.step + 1)))));
+          fs_ = compare(cand, base, noise, orderNoise).filter((f) => !(f.type === 'navigation-differs' && noisyNav.has(f.step === 0 ? start : JSON.stringify(plan.slice(0, f.step + 1)))));
         }
       } else {
         fs_ = compare(cand, cand.map((s) => ({ ...s, events: [] })));

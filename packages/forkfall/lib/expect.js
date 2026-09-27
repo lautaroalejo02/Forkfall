@@ -65,6 +65,7 @@ export async function checkAgainstPlan({ exploration, expected, apiKey, log = ()
         screen: f.route,
         steps: f.repro.map((s) => s.text),
         problem_seen: ['output-differs', 'navigation-differs'].includes(f.type) ? null : f.detail,
+        new_version_screen: (f.screen ?? []).slice(0, 120),
         new_version_only: f.added ?? [],
         previous_version_only: f.removed ?? [],
       }, Object.fromEntries(candidates.map((c) => [c.id, c.description])));

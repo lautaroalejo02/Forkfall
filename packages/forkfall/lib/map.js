@@ -22,7 +22,7 @@ const T = {
     confirmedTag: 'CONFIRMED', possibleTag: 'POSSIBLE', suspiciousTag: 'SUSPICIOUS', intendedTag: 'LOOKS INTENDED', unexplainedTag: 'NOT EXPLAINED BY THE CHANGE',
     judged: "Jev's judgment (a judgment, not a verification)", explainedP: 'explained by the change', inconsistentP: 'screen contradicts itself',
     suspicious: 'Suspicious differences', suspiciousHint: 'Differences where Jev judged that the new screen contradicts itself. Check these first.', noEvidence: 'NOT EXPLORED', explored: 'explored', notExplored: 'not explored',
-    types: { arithmetic: 'Numbers do not add up', 'js-error': 'JavaScript error', 'server-error': 'Server error', 'http-failure': 'Request failed', dialog: 'Unexpected dialog', 'navigation-differs': 'Goes somewhere else', 'output-differs': 'Shows something different', 'baseline-cannot-follow': 'New or changed controls' },
+    types: { 'order-differs': 'Same content, different order', arithmetic: 'Numbers do not add up', 'js-error': 'JavaScript error', 'server-error': 'Server error', 'http-failure': 'Request failed', dialog: 'Unexpected dialog', 'navigation-differs': 'Goes somewhere else', 'output-differs': 'Shows something different', 'baseline-cannot-follow': 'New or changed controls' },
   },
   es: {
     title: 'Consecuencias de este cambio', change: 'Cambio', files: 'Archivos cambiados', entries: 'Pantallas y APIs alcanzadas', findings: 'Lo que encontró la exploración',
@@ -42,7 +42,7 @@ const T = {
     confirmedTag: 'CONFIRMADO', possibleTag: 'POSIBLE', suspiciousTag: 'SOSPECHOSO', intendedTag: 'PARECE INTENCIONAL', unexplainedTag: 'NO SE EXPLICA POR EL CAMBIO',
     judged: 'Juicio de Jev (es un juicio, no una verificación)', explainedP: 'se explica por el cambio', inconsistentP: 'la pantalla se contradice',
     suspicious: 'Diferencias sospechosas', suspiciousHint: 'Diferencias donde Jev juzgó que la pantalla nueva se contradice. Revisá estas primero.', noEvidence: 'SIN EXPLORAR', explored: 'explorada', notExplored: 'sin explorar',
-    types: { arithmetic: 'Los números no cierran', 'js-error': 'Error de JavaScript', 'server-error': 'Error del servidor', 'http-failure': 'Falló un pedido', dialog: 'Diálogo inesperado', 'navigation-differs': 'Lleva a otro lado', 'output-differs': 'Muestra algo distinto', 'baseline-cannot-follow': 'Controles nuevos o cambiados' },
+    types: { 'order-differs': 'Mismo contenido, otro orden', arithmetic: 'Los números no cierran', 'js-error': 'Error de JavaScript', 'server-error': 'Error del servidor', 'http-failure': 'Falló un pedido', dialog: 'Diálogo inesperado', 'navigation-differs': 'Lleva a otro lado', 'output-differs': 'Muestra algo distinto', 'baseline-cannot-follow': 'Controles nuevos o cambiados' },
   },
 };
 
