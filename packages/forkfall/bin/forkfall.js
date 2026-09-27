@@ -7,10 +7,13 @@ import { captureCheck, deriveState, recordDecision, ACTIONS } from '../lib/state
 import { renderReport } from '../lib/report.js';
 import { analyzeImpact } from '../lib/impact.js';
 import { renderMap } from '../lib/map.js';
+import { loadConfig, detect, writeConfig, doctor, scanEnv } from '../lib/setup.js';
 
 const USAGE = `forkfall — decide on behavior, not diffs
 
 Usage:
+  forkfall init     [repo]   detect how to run the app, write forkfall.config.json, warn about unsafe envs
+  forkfall doctor   [repo]   check that everything needed is in place
   forkfall impact   <repo> [--base HEAD~1] [--head HEAD|WORKTREE] [--files a.ts,b.ts] [--out impact.json]
                     --files: predict impact from a plan's files instead of a diff
   forkfall explore  <repo> --start "<command using $PORT>" [--base HEAD~1] [--head HEAD]
@@ -19,6 +22,7 @@ Usage:
                     [--intent "what the change is meant to do"] [--ready-minutes 2]
                     [--baseline-env file --candidate-env file]  (copied to each copy as .env.local)
                     [--record 3]  record side-by-side replays of the top findings (0 = off)
+                    [--expect expected.json]  check every difference against a plan's expected changes
                     or, for apps you already run: --candidate-url URL [--baseline-url URL]
   forkfall judge    <run-dir> [--intent "..."] [--lang es|en]   re-judge a run with Jev (needs TYPESAFE_API_KEY)
   forkfall validate <analysis.json>
@@ -48,6 +52,13 @@ async function runExplore(repo, v) {
   let baselineUrl = v['baseline-url'];
   if (!candidateUrl) {
     if (!v.start) { console.error('explore needs --start "<command>" or --candidate-url'); return 2; }
+    // Env files copied into BOTH copies must not point at a real database.
+    const shared = scanEnv(repo, v['env-file'] ?? []).filter((w) => w.kind === 'database');
+    if (shared.length && !v['allow-shared-db']) {
+      for (const w of shared) console.error(`refusing to start: ${w.message}`);
+      console.error('Both copies would share it. Use baselineEnv/candidateEnv with disposable databases, or pass --allow-shared-db if that database is disposable.');
+      return 2;
+    }
     apps = await startApps({
       repo, base, head, start: v.start, envFiles: v['env-file'] ?? [],
       baselineEnv: v['baseline-env'], candidateEnv: v['candidate-env'],
@@ -71,6 +82,7 @@ async function runExplore(repo, v) {
     });
     // Judge and record while both apps are still running: recording replays the steps.
     if (process.env.TYPESAFE_API_KEY) await judgeRun({ impact, exploration, v, outDir });
+    if (v.expect) await planRun({ exploration, v });
     await recordRun({ exploration, impact, candidateUrl, baselineUrl, v, outDir });
   } finally {
     apps?.stop();
@@ -80,16 +92,61 @@ async function runExplore(repo, v) {
   const mapFile = path.join(outDir, 'map.html');
   fs.writeFileSync(mapFile, renderMap({ impact, exploration, lang: v.lang ?? 'en' }));
   const bad = exploration.findings.filter((f) => !f.preexisting && f.severity >= 2);
+  if (exploration.plan) printPlan(exploration);
   console.log(`\n${exploration.coverage.sequences} sequences, ${exploration.coverage.distinctStates} states, ${bad.length} confirmed problem(s), ${exploration.findings.filter((f) => !f.preexisting && f.severity === 1).length} difference(s)`);
   for (const f of bad) console.log(`  [${f.type}] ${f.route}: ${f.detail}\n    ${f.repro.map((s) => s.text).join(' → ')}`);
   const top = exploration.findings.filter((f) => f.replay).sort((a, b) => replayRank(a) - replayRank(b))[0];
   if (top) console.log(`replay: ${path.join(outDir, top.replay.page)}`);
   console.log(`map: ${mapFile}`);
-  return bad.length ? 1 : 0;
+  return bad.length || exploration.plan?.unexpected.length ? 1 : 0;
 }
 
-// Most interesting first: suspicious differences, then confirmed errors, then the rest.
-const replayRank = (f) => (f.judgment?.verdict === 'suspicious' ? 0 : f.severity >= 2 ? 1 : f.judgment?.verdict === 'unexplained' ? 2 : 3);
+function runInit(repo, v) {
+  const d = detect(repo);
+  const { file, written } = writeConfig(repo, d, { force: v.force });
+  console.log(`framework: ${d.framework}`);
+  console.log(`start:     ${d.start ?? '(not found: set "start" by hand)'}`);
+  console.log(`reset:     ${d.resetPath ?? '(none found: sequences will share state; add a reset endpoint if you can)'}`);
+  for (const n of d.notes) console.log(`note: ${n}`);
+  for (const w of d.warnings) console.log(`WARNING: ${w.message}`);
+  console.log(written ? `
+wrote ${file}` : `
+${file} already exists (use --force to overwrite)`);
+  console.log('next: edit baselineEnv/candidateEnv if your app needs a database, then run: forkfall doctor');
+  return 0;
+}
+
+async function runDoctor(repo) {
+  const r = await doctor(repo);
+  for (const c of r.checks) console.log(`${c.ok === true ? 'ok  ' : c.ok === null ? '--  ' : 'FAIL'} ${c.what}${c.ok === true ? '' : `  → ${c.fix}`}`);
+  for (const w of r.warnings) console.log(`WARN ${w.message}`);
+  const failed = r.checks.filter((c) => c.ok === false).length;
+  console.log(failed ? `
+${failed} problem(s) to fix before exploring.` : `
+ready: forkfall explore ${repo}`);
+  return failed ? 1 : 0;
+}
+
+async function planRun({ exploration, v }) {
+  const { checkAgainstPlan, validateExpected } = await import('../lib/expect.js');
+  const expected = JSON.parse(fs.readFileSync(v.expect, 'utf8'));
+  const errs = validateExpected(expected);
+  if (errs.length) throw new Error(`invalid ${v.expect}:\n  ${errs.join('\n  ')}`);
+  exploration.plan = await checkAgainstPlan({ exploration, expected, apiKey: process.env.TYPESAFE_API_KEY, log: (m) => console.log(m) });
+}
+
+function printPlan(exploration) {
+  const p = exploration.plan;
+  console.log('\nagainst the plan:');
+  for (const c of p.changes) console.log(`  ${c.status === 'seen' ? 'SEEN    ' : c.status === 'maybe' ? 'MAYBE   ' : 'NOT SEEN'} ${c.id}${c.seen.length ? ` (${c.seen.length} finding(s))` : ''}`);
+  for (const id of p.unexpected) {
+    const f = exploration.findings.find((x) => x.id === id);
+    console.log(`  UNEXPECTED ${f.type} on ${f.route} (${f.plan.reason}): ${[...(f.added ?? []), f.detail].filter(Boolean)[0]?.slice(0, 100)}\n    ${f.repro.map((s) => s.text).join(' → ')}`);
+  }
+}
+
+// Most interesting first: outside the plan, suspicious, confirmed errors, then the rest.
+const replayRank = (f) => (f.plan?.status === 'unexpected' ? 0 : f.judgment?.verdict === 'suspicious' ? 1 : f.severity >= 2 ? 2 : f.judgment?.verdict === 'unexplained' ? 3 : 4);
 
 async function recordRun({ exploration, impact, candidateUrl, baselineUrl, v, outDir }) {
   const max = Number(v.record ?? 3);
@@ -131,13 +188,16 @@ async function main(argv) {
       sequences: { type: 'string' }, steps: { type: 'string' }, minutes: { type: 'string' }, seed: { type: 'string' },
       'env-file': { type: 'string', multiple: true }, lang: { type: 'string' }, 'out-dir': { type: 'string' },
       'candidate-url': { type: 'string' }, intent: { type: 'string' },
-      'baseline-env': { type: 'string' }, record: { type: 'string' }, 'candidate-env': { type: 'string' }, 'ready-minutes': { type: 'string' }, 'baseline-url': { type: 'string' }, check: { type: 'string' }, yes: { type: 'boolean' },
+      'baseline-env': { type: 'string' }, record: { type: 'string' }, expect: { type: 'string' }, force: { type: 'boolean' }, 'allow-shared-db': { type: 'boolean' },
+      'candidate-env': { type: 'string' }, 'ready-minutes': { type: 'string' }, 'baseline-url': { type: 'string' }, check: { type: 'string' }, yes: { type: 'boolean' },
       by: { type: 'string' }, basis: { type: 'string' }, action: { type: 'string' }, note: { type: 'string' }, help: { type: 'boolean', short: 'h' },
     },
   });
   const [cmd, file, ...rest] = positionals;
   if (values.help || !cmd) { console.log(USAGE); return 0; }
-  if (!file) { console.error(USAGE); return 2; }
+  if (cmd === 'init') return runInit(file ?? '.', values);
+  if (cmd === 'doctor') return runDoctor(file ?? '.');
+  if (!file && cmd !== 'explore') { console.error(USAGE); return 2; }
 
   if (cmd === 'impact') {
     const result = analyzeImpact({ repo: file, base: values.base ?? 'HEAD~1', head: values.head ?? 'HEAD', files: values.files?.split(',').map((f) => f.trim()).filter(Boolean) });
@@ -147,11 +207,22 @@ async function main(argv) {
     return 0;
   }
 
-  if (cmd === 'explore') return runExplore(file, values);
+  if (cmd === 'explore') {
+    const repo = file ?? '.';
+    // Settings from forkfall.config.json; command-line flags win.
+    return runExplore(repo, { ...loadConfig(repo), ...values });
+  }
   if (cmd === 'judge') {
     const impact = JSON.parse(fs.readFileSync(path.join(file, 'impact.json'), 'utf8'));
     const exploration = JSON.parse(fs.readFileSync(path.join(file, 'exploration.json'), 'utf8'));
     await judgeRun({ impact, exploration, v: values, outDir: file });
+    if (values.expect) {
+      await planRun({ exploration, v: values });
+      printPlan(exploration);
+      fs.writeFileSync(path.join(file, 'exploration.json'), `${JSON.stringify(exploration, null, 2)}
+`);
+      fs.writeFileSync(path.join(file, 'map.html'), renderMap({ impact, exploration, lang: values.lang ?? 'en' }));
+    }
     return 0;
   }
 

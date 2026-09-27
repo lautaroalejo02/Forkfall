@@ -45,7 +45,8 @@ async function startOne({ repo, ref, label, start, port, envFiles, envFile, read
   if (envFile) fs.copyFileSync(envFile, path.join(dir, '.env.local'));
   const logFile = path.join(os.tmpdir(), `forkfall-${label}.log`);
   const out = fs.openSync(logFile, 'w');
-  const child = spawn(start, {
+  // "{port}" in the start command is replaced per copy; PORT is also set in the environment.
+  const child = spawn(start.replaceAll('{port}', String(port)), {
     cwd: dir, shell: true, detached: process.platform !== 'win32',
     env: { ...process.env, PORT: String(port) }, stdio: ['ignore', out, out],
   });

@@ -10,6 +10,9 @@ const T = {
     diffs: 'Behavior differences', diffsHint: 'The new version shows something different from the previous one after the same steps. May be intended.',
     pre: 'Problems that already existed', preHint: 'Also happen in the previous version, so this change did not cause them.',
     replay: 'Watch both versions side by side',
+    againstPlan: 'Against the plan', planSeen: 'Planned change seen', planMaybe: 'On a planned screen (not judged)', planNotSeen: 'Planned change not seen: not implemented, or exploration never reached it',
+    planUnexpected: 'Changed without being in the plan', planUnexpectedHint: 'These differences are not explained by any planned change. Treat them as failures until someone decides otherwise.',
+    expectedTag: 'EXPECTED', unexpectedTag: 'NOT IN THE PLAN',
     divergedHint: 'The previous version could not perform a step the new one did, so comparison stopped there. Often a new or renamed control; otherwise a regression in the previous flow.',
     gaps: 'Scenarios that could not finish', gapsHint: 'The explorer could not find a control the scenario asked for, so everything after that step was not tested.',
     unexplored: 'Affected but not explored', unexploredHint: 'Reachable from the change, but exploration never got there. No evidence either way.',
@@ -27,6 +30,9 @@ const T = {
     diffs: 'Diferencias de comportamiento', diffsHint: 'Con los mismos pasos, la versión nueva muestra algo distinto que la anterior. Puede ser intencional.',
     pre: 'Problemas que ya existían', preHint: 'También pasan en la versión anterior; este cambio no los causó.',
     replay: 'Ver las dos versiones lado a lado',
+    againstPlan: 'Contra el plan', planSeen: 'Cambio planeado visto', planMaybe: 'En una pantalla del plan (sin juzgar)', planNotSeen: 'Cambio planeado no visto: no se implementó, o la exploración no llegó',
+    planUnexpected: 'Cambió sin estar en el plan', planUnexpectedHint: 'Ninguno de los cambios planeados explica estas diferencias. Tratalas como fallas hasta que alguien decida lo contrario.',
+    expectedTag: 'ESPERADO', unexpectedTag: 'FUERA DEL PLAN',
     divergedHint: 'La versión anterior no pudo hacer un paso que la nueva sí, así que la comparación se cortó ahí. Suele ser un control nuevo o renombrado.',
     gaps: 'Escenarios que no se pudieron completar', gapsHint: 'El explorador no encontró un control que el escenario pedía, así que lo que venía después no se probó.',
     unexplored: 'Afectadas pero no exploradas', unexploredHint: 'El cambio llega hasta acá, pero la exploración no pasó por estas pantallas. No hay evidencia ni a favor ni en contra.',
@@ -117,7 +123,7 @@ export function renderMap({ impact, exploration, lang = 'en' }) {
 
   // ---- cards
   const pct = (x) => `${Math.round(x * 100)}%`;
-  const tagFor = (f) => (f.severity >= 2 && !f.preexisting ? ['bad', t.confirmedTag] : suspiciousOf(f) ? ['sus', t.suspiciousTag] : f.judgment?.verdict === 'unexplained' ? ['warn', t.unexplainedTag] : f.judgment?.verdict ? ['warn', t.intendedTag] : ['warn', t.possibleTag]);
+  const tagFor = (f) => (f.plan?.status === 'unexpected' ? ['bad', t.unexpectedTag] : f.plan?.status === 'expected' ? ['ok', `${t.expectedTag}: ${f.plan.change}`] : f.severity >= 2 && !f.preexisting ? ['bad', t.confirmedTag] : suspiciousOf(f) ? ['sus', t.suspiciousTag] : f.judgment?.verdict === 'unexplained' ? ['warn', t.unexplainedTag] : f.judgment?.verdict ? ['warn', t.intendedTag] : ['warn', t.possibleTag]);
   const findingCard = (f) => `<article class="card ${f.severity >= 2 && !f.preexisting ? 'bad' : suspiciousOf(f) ? 'sus' : ''}" id="${esc(f.id)}">
     <h3><span class="tag ${tagFor(f)[0]}">${tagFor(f)[1]}</span> ${esc(t.types[f.type])} ${t.where} <code>${esc(f.route)}</code></h3>
     <p>${esc(f.detail)}</p>
@@ -148,7 +154,7 @@ rect.bad{fill:#fdecec;stroke:#a4161a;stroke-width:3}rect.diff{fill:#fff8e1;strok
 .card.sus{border-left-color:#d9480f}.tag.sus{color:#d9480f;border-width:3px}.judge{background:#f4f1ff;padding:.3rem .6rem;border-radius:4px;font-size:.9em}.edge.bad{stroke:#a4161a;stroke-width:2.5}.edge.diff{stroke:#c98a00}
 .summary{display:flex;gap:.8rem;flex-wrap:wrap}.summary div{background:#fff;border:1px solid #ccc;border-radius:6px;padding:.4rem .9rem}
 .card{background:#fff;border:1px solid #ccc;border-left:6px solid #c98a00;border-radius:6px;padding:.5rem 1rem;margin:.8rem 0}.card.bad{border-left-color:#a4161a}
-.tag{font-size:.75em;font-weight:700;padding:.1rem .5rem;border-radius:1rem;border:2px solid}.tag.bad{color:#a4161a;border-style:double;border-width:3px}.tag.warn{color:#8a5300;border-style:dashed}
+.tag{font-size:.75em;font-weight:700;padding:.1rem .5rem;border-radius:1rem;border:2px solid}.tag.bad{color:#a4161a;border-style:double;border-width:3px}.tag.warn{color:#8a5300;border-style:dashed}.tag.ok{color:#0b6b2e}ul.plan{list-style:none;padding-left:0}ul.plan li{margin:.5rem 0}
 .diff{font-family:ui-monospace,monospace;font-size:.85em}.diff.add li{color:#0b6b2e}.diff.rem li{color:#a4161a;text-decoration:line-through}
 a.replay{display:inline-block;background:#364fc7;color:#fff;padding:.25rem .8rem;border-radius:6px;text-decoration:none;font-weight:600}
 code{background:#eee;padding:0 .3rem;border-radius:3px}a:focus{outline:3px solid #1a5fb4}
@@ -162,6 +168,10 @@ code{background:#eee;padding:0 .3rem;border-radius:3px}a:focus{outline:3px solid
   <div><strong>${confirmed.length}</strong> ${t.problems}${suspicious.length ? ` · <strong>${suspicious.length}</strong> ${t.suspicious.toLowerCase()}` : ''} · <strong>${diffs.length}</strong> ${t.differences}</div>` : ''}
 </section>
 ${svg}
+${exploration?.plan ? `<h2 id="plan">${t.againstPlan}</h2>
+<ul class="plan">${exploration.plan.changes.map((c) => `<li><span class="tag ${c.status === 'seen' ? 'ok' : 'warn'}">${c.status === 'seen' ? '✔' : '?'}</span> <strong>${esc(c.id)}</strong>: ${c.status === 'seen' ? `${t.planSeen} (${c.seen.map((id) => `<a href="#${esc(id)}">${esc(id)}</a>`).join(', ')})` : c.status === 'maybe' ? t.planMaybe : t.planNotSeen}<br><span class="meta">${esc(c.description)}</span></li>`).join('')}</ul>
+<h3>${t.planUnexpected} (${exploration.plan.unexpected.length})</h3><p class="meta">${t.planUnexpectedHint}</p>
+${exploration.plan.unexpected.map((id) => findings.find((f) => f.id === id)).filter(Boolean).map(findingCard).join('') || `<p>${t.none}</p>`}` : ''}
 <h2 id="confirmed">${t.confirmed}</h2><p class="meta">${t.confirmedHint}</p>
 ${confirmed.map(findingCard).join('') || `<p>${t.none}</p>`}
 ${suspicious.length ? `<h2 id="suspicious">${t.suspicious}</h2><p class="meta">${t.suspiciousHint}</p>${suspicious.map(findingCard).join('')}` : ''}
