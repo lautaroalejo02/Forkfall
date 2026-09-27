@@ -325,6 +325,7 @@ function compare(cand, base, noise = new Set()) {
   const n = Math.min(cand.length, base.length);
   for (let i = 0; i < cand.length; i++) {
     const c = cand[i];
+    if (c.action.kind === 'note') break; // a scenario step that was never performed: nothing to compare
     const b = i < n ? base[i] : null;
     if (b?.missing || (!b && i > 0)) {
       findings.push({ type: 'baseline-cannot-follow', step: i, route: c.route, detail: `The baseline has no "${c.action.name ?? c.action.kind}" here, so the paths diverge (often an intended UI change).` });
