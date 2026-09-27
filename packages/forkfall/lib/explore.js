@@ -3,7 +3,7 @@
 // Every finding carries the exact steps that reproduce it.
 import crypto from 'node:crypto';
 
-const DEFAULTS = { sequences: 40, maxSteps: 8, timeMs: 5 * 60_000, settleMs: 2500, seed: 1, waitForMs: 15_000 };
+export const DEFAULTS = { sequences: 40, maxSteps: 8, timeMs: 5 * 60_000, settleMs: 2500, seed: 1, waitForMs: 15_000 };
 
 function rng(seed) {
   let a = seed >>> 0;
@@ -110,8 +110,8 @@ const maskText = (t) => t
   .split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter(Boolean).slice(0, 400);
 
 // One browser context per sequence, so cookies and storage never leak between runs.
-async function openSession(browser, baseUrl) {
-  const context = await browser.newContext({ baseURL: baseUrl });
+export async function openSession(browser, baseUrl, contextOptions = {}) {
+  const context = await browser.newContext({ baseURL: baseUrl, ...contextOptions });
   const page = await context.newPage();
   const events = [];
   page.on('pageerror', (e) => events.push({ type: 'pageerror', message: String(e.message).slice(0, 500) }));
@@ -128,7 +128,7 @@ async function openSession(browser, baseUrl) {
 }
 
 // Waits until the visible text stops changing (apps that poll never reach "network idle").
-async function settle(page, ms) {
+export async function settle(page, ms) {
   await page.waitForLoadState('load', { timeout: ms }).catch(() => {});
   const until = Date.now() + ms * 2;
   let last = null;
@@ -141,7 +141,7 @@ async function settle(page, ms) {
   }
 }
 
-async function observe(page, events, since) {
+export async function observe(page, events, since) {
   const url = new URL(page.url());
   let actions = [];
   let text = [];
@@ -163,7 +163,7 @@ async function observe(page, events, since) {
   return { path: url.pathname + url.search, route: routePattern(url.pathname), fingerprint, actions, text, events: events.slice(since) };
 }
 
-const describe = (step) => {
+export const describe = (step) => {
   switch (step.kind) {
     case 'goto': return `Open ${step.path}`;
     case 'click': return `Click ${step.tag === 'a' ? 'link' : 'button'} "${step.name || step.key}"`;
@@ -174,7 +174,7 @@ const describe = (step) => {
   }
 };
 
-async function perform(page, step, actions) {
+export async function perform(page, step, actions) {
   if (step.kind === 'goto') return page.goto(step.path);
   if (step.kind === 'fillAll') {
     for (const a of actions.filter((x) => x.kind === 'fill' && x.empty)) {
@@ -237,7 +237,7 @@ function chooseAction(obs, stats, focusRoutes, prev, rand, harvested, seen) {
   return options.at(-1).step;
 }
 
-async function reset(url, cfg) {
+export async function reset(url, cfg) {
   if (!cfg.resetPath) return;
   if (!cfg.resetPath.startsWith('/')) {
     throw new Error(`--reset-path must start with "/" (got "${cfg.resetPath}"). In Git Bash, set MSYS_NO_PATHCONV=1 so "/path" arguments aren't rewritten.`);

@@ -9,6 +9,7 @@ const T = {
     unpredicted: 'Screens static analysis did not predict', confirmed: 'Confirmed problems', confirmedHint: 'Seen happening in the new version and not in the previous one. Each comes with the steps to reproduce it.',
     diffs: 'Behavior differences', diffsHint: 'The new version shows something different from the previous one after the same steps. May be intended.',
     pre: 'Problems that already existed', preHint: 'Also happen in the previous version, so this change did not cause them.',
+    replay: 'Watch both versions side by side',
     divergedHint: 'The previous version could not perform a step the new one did, so comparison stopped there. Often a new or renamed control; otherwise a regression in the previous flow.',
     gaps: 'Scenarios that could not finish', gapsHint: 'The explorer could not find a control the scenario asked for, so everything after that step was not tested.',
     unexplored: 'Affected but not explored', unexploredHint: 'Reachable from the change, but exploration never got there. No evidence either way.',
@@ -25,6 +26,7 @@ const T = {
     unpredicted: 'Pantallas que el análisis estático no predijo', confirmed: 'Problemas confirmados', confirmedHint: 'Se vieron pasar en la versión nueva y no en la anterior. Cada uno trae los pasos para reproducirlo.',
     diffs: 'Diferencias de comportamiento', diffsHint: 'Con los mismos pasos, la versión nueva muestra algo distinto que la anterior. Puede ser intencional.',
     pre: 'Problemas que ya existían', preHint: 'También pasan en la versión anterior; este cambio no los causó.',
+    replay: 'Ver las dos versiones lado a lado',
     divergedHint: 'La versión anterior no pudo hacer un paso que la nueva sí, así que la comparación se cortó ahí. Suele ser un control nuevo o renombrado.',
     gaps: 'Escenarios que no se pudieron completar', gapsHint: 'El explorador no encontró un control que el escenario pedía, así que lo que venía después no se probó.',
     unexplored: 'Afectadas pero no exploradas', unexploredHint: 'El cambio llega hasta acá, pero la exploración no pasó por estas pantallas. No hay evidencia ni a favor ni en contra.',
@@ -37,6 +39,8 @@ const T = {
     types: { 'js-error': 'Error de JavaScript', 'server-error': 'Error del servidor', 'http-failure': 'Falló un pedido', dialog: 'Diálogo inesperado', 'navigation-differs': 'Lleva a otro lado', 'output-differs': 'Muestra algo distinto', 'baseline-cannot-follow': 'Controles nuevos o cambiados' },
   },
 };
+
+export const typeLabel = (type, lang = 'en') => (T[lang] ?? T.en).types[type] ?? type;
 
 const routeKey = (r) => r.replace(/\[[^\]]+\]|:\w+/g, ':id').replace(/\.html?$/, '').replace(/\/index$/, '') || '/';
 
@@ -117,6 +121,7 @@ export function renderMap({ impact, exploration, lang = 'en' }) {
   const findingCard = (f) => `<article class="card ${f.severity >= 2 && !f.preexisting ? 'bad' : suspiciousOf(f) ? 'sus' : ''}" id="${esc(f.id)}">
     <h3><span class="tag ${tagFor(f)[0]}">${tagFor(f)[1]}</span> ${esc(t.types[f.type])} ${t.where} <code>${esc(f.route)}</code></h3>
     <p>${esc(f.detail)}</p>
+    ${f.replay ? `<p><a class="replay" href="${esc(f.replay.page)}">▶ ${t.replay}</a></p>` : ''}
     ${f.judgment?.verdict ? `<p class="judge">${t.judged}: ${t.explainedP} <strong>${pct(f.judgment.explainedByIntent)}</strong> · ${t.inconsistentP} <strong>${pct(f.judgment.screenInconsistent)}</strong></p>` : ''}
     ${f.added?.length ? `<p class="meta">${t.added}:</p><ul class="diff add">${f.added.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}
     ${f.removed?.length ? `<p class="meta">${t.removed}:</p><ul class="diff rem">${f.removed.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}
@@ -145,6 +150,7 @@ rect.bad{fill:#fdecec;stroke:#a4161a;stroke-width:3}rect.diff{fill:#fff8e1;strok
 .card{background:#fff;border:1px solid #ccc;border-left:6px solid #c98a00;border-radius:6px;padding:.5rem 1rem;margin:.8rem 0}.card.bad{border-left-color:#a4161a}
 .tag{font-size:.75em;font-weight:700;padding:.1rem .5rem;border-radius:1rem;border:2px solid}.tag.bad{color:#a4161a;border-style:double;border-width:3px}.tag.warn{color:#8a5300;border-style:dashed}
 .diff{font-family:ui-monospace,monospace;font-size:.85em}.diff.add li{color:#0b6b2e}.diff.rem li{color:#a4161a;text-decoration:line-through}
+a.replay{display:inline-block;background:#364fc7;color:#fff;padding:.25rem .8rem;border-radius:6px;text-decoration:none;font-weight:600}
 code{background:#eee;padding:0 .3rem;border-radius:3px}a:focus{outline:3px solid #1a5fb4}
 </style></head><body>
 <h1>${esc(t.title)}</h1>

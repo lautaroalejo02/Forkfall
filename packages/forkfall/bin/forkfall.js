@@ -18,6 +18,7 @@ Usage:
                     [--minutes 5] [--seed 1] [--env-file .env] [--lang es|en] [--out-dir dir]
                     [--intent "what the change is meant to do"] [--ready-minutes 2]
                     [--baseline-env file --candidate-env file]  (copied to each copy as .env.local)
+                    [--record 3]  record side-by-side replays of the top findings (0 = off)
                     or, for apps you already run: --candidate-url URL [--baseline-url URL]
   forkfall judge    <run-dir> [--intent "..."] [--lang es|en]   re-judge a run with Jev (needs TYPESAFE_API_KEY)
   forkfall validate <analysis.json>
@@ -68,23 +69,40 @@ async function runExplore(repo, v) {
       timeMs: Number(v.minutes ?? 5) * 60_000, seed: Number(v.seed ?? 1),
       log: (m) => console.log(m),
     });
+    // Judge and record while both apps are still running: recording replays the steps.
+    if (process.env.TYPESAFE_API_KEY) await judgeRun({ impact, exploration, v, outDir });
+    await recordRun({ exploration, impact, candidateUrl, baselineUrl, v, outDir });
   } finally {
     apps?.stop();
   }
-  if (process.env.TYPESAFE_API_KEY) await judgeRun({ impact, exploration, v, outDir });
-  fs.writeFileSync(path.join(outDir, 'impact.json'), `${JSON.stringify(impact, null, 2)}
-`);
-  fs.writeFileSync(path.join(outDir, 'exploration.json'), `${JSON.stringify(exploration, null, 2)}
-`);
+  fs.writeFileSync(path.join(outDir, 'impact.json'), `${JSON.stringify(impact, null, 2)}\n`);
+  fs.writeFileSync(path.join(outDir, 'exploration.json'), `${JSON.stringify(exploration, null, 2)}\n`);
   const mapFile = path.join(outDir, 'map.html');
   fs.writeFileSync(mapFile, renderMap({ impact, exploration, lang: v.lang ?? 'en' }));
   const bad = exploration.findings.filter((f) => !f.preexisting && f.severity >= 2);
-  console.log(`
-${exploration.coverage.sequences} sequences, ${exploration.coverage.distinctStates} states, ${bad.length} confirmed problem(s), ${exploration.findings.filter((f) => !f.preexisting && f.severity === 1).length} difference(s)`);
-  for (const f of bad) console.log(`  [${f.type}] ${f.route}: ${f.detail}
-    ${f.repro.map((s) => s.text).join(' → ')}`);
+  console.log(`\n${exploration.coverage.sequences} sequences, ${exploration.coverage.distinctStates} states, ${bad.length} confirmed problem(s), ${exploration.findings.filter((f) => !f.preexisting && f.severity === 1).length} difference(s)`);
+  for (const f of bad) console.log(`  [${f.type}] ${f.route}: ${f.detail}\n    ${f.repro.map((s) => s.text).join(' → ')}`);
+  const top = exploration.findings.filter((f) => f.replay).sort((a, b) => replayRank(a) - replayRank(b))[0];
+  if (top) console.log(`replay: ${path.join(outDir, top.replay.page)}`);
   console.log(`map: ${mapFile}`);
   return bad.length ? 1 : 0;
+}
+
+// Most interesting first: suspicious differences, then confirmed errors, then the rest.
+const replayRank = (f) => (f.judgment?.verdict === 'suspicious' ? 0 : f.severity >= 2 ? 1 : f.judgment?.verdict === 'unexplained' ? 2 : 3);
+
+async function recordRun({ exploration, impact, candidateUrl, baselineUrl, v, outDir }) {
+  const max = Number(v.record ?? 3);
+  const chosen = exploration.findings
+    .filter((f) => !f.preexisting && f.severity >= 1 && f.repro?.length)
+    .sort((a, b) => replayRank(a) - replayRank(b) || a.repro.length - b.repro.length);
+  if (!max || !chosen.length) return;
+  const { recordFindings } = await import('../lib/record.js');
+  const { renderReplay } = await import('../lib/replay.js');
+  const { typeLabel } = await import('../lib/map.js');
+  const lang = v.lang ?? 'en';
+  const done = await recordFindings({ candidateUrl, baselineUrl, findings: chosen, outDir, max, resetPath: v['reset-path'], log: (m) => console.log(m) });
+  for (const f of done) fs.writeFileSync(path.join(outDir, f.replay.page), renderReplay({ finding: f, impact, lang, typeLabel: typeLabel(f.type, lang) }));
 }
 
 async function judgeRun({ impact, exploration, v, outDir }) {
@@ -113,7 +131,7 @@ async function main(argv) {
       sequences: { type: 'string' }, steps: { type: 'string' }, minutes: { type: 'string' }, seed: { type: 'string' },
       'env-file': { type: 'string', multiple: true }, lang: { type: 'string' }, 'out-dir': { type: 'string' },
       'candidate-url': { type: 'string' }, intent: { type: 'string' },
-      'baseline-env': { type: 'string' }, 'candidate-env': { type: 'string' }, 'ready-minutes': { type: 'string' }, 'baseline-url': { type: 'string' }, check: { type: 'string' }, yes: { type: 'boolean' },
+      'baseline-env': { type: 'string' }, record: { type: 'string' }, 'candidate-env': { type: 'string' }, 'ready-minutes': { type: 'string' }, 'baseline-url': { type: 'string' }, check: { type: 'string' }, yes: { type: 'boolean' },
       by: { type: 'string' }, basis: { type: 'string' }, action: { type: 'string' }, note: { type: 'string' }, help: { type: 'boolean', short: 'h' },
     },
   });
