@@ -48,8 +48,11 @@ export async function checkAgainstPlan({ exploration, expected, apiKey, log = ()
   const relevant = exploration.findings.filter((f) => !f.preexisting && f.severity >= 1);
 
   await Promise.all(relevant.map(async (f) => {
+    // A screen can be partly in the plan (e.g. "the product page, except the quantity limit, must not
+    // change"): when any planned change touches it, let the judge decide; "unchanged" only settles
+    // screens no planned change touches.
     const candidates = onScreen(f.route);
-    if (!candidates.length || mustStay(f.route)) {
+    if (!candidates.length) {
       f.plan = { status: 'unexpected', reason: mustStay(f.route) ? 'screen the plan says must not change' : 'screen not touched by any planned change' };
       return;
     }

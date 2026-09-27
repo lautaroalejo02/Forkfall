@@ -1,7 +1,7 @@
 {
   "name": "forkfall",
   "version": "0.1.0",
-  "description": "Decide on behavior, assumptions and consequences of a change, with captured evidence and approvals that expire.",
+  "description": "See what your change breaks two screens away: runs both versions of your web app side by side and reports what changed.",
   "type": "module",
   "bin": {
     "forkfall": "bin/forkfall.js"
@@ -13,8 +13,21 @@
     "test": "node --test"
   },
   "license": "UNLICENSED",
-  "private": true,
   "dependencies": {
     "playwright": "^1.62.1"
-  }
+  },
+  "keywords": [
+    "regression",
+    "testing",
+    "playwright",
+    "coding-agents",
+    "impact-analysis",
+    "visual-diff"
+  ],
+  "files": [
+    "bin",
+    "lib",
+    "demo",
+    "README.md"
+  ]
 }

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import net from 'node:net';
 import { spawn, spawnSync } from 'node:child_process';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -83,13 +84,20 @@ async function startOne({ repo, ref, label, start, port, envFiles, envFile, read
   };
 }
 
-export async function startApps({ repo, base, head, start, port = 4610, envFiles = [], baselineEnv, candidateEnv, readyTimeoutMs = 120_000, log }) {
+// Ports the OS says are free right now, so parallel runs never answer each other's requests.
+const freePort = () => new Promise((resolve, reject) => {
+  const s = net.createServer().once('error', reject).listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)); });
+});
+
+export async function startApps({ repo, base, head, start, port, envFiles = [], baselineEnv, candidateEnv, readyTimeoutMs = 120_000, log }) {
   const apps = {};
+  const basePort = port ?? await freePort();
+  const candPort = port ? port + 1 : await freePort();
   try {
     // Started in parallel: builds can take minutes.
     const [b, c] = await Promise.allSettled([
-      startOne({ repo, ref: base, label: 'baseline', start, port, envFiles, envFile: baselineEnv, readyTimeoutMs, log }),
-      startOne({ repo, ref: head, label: 'candidate', start, port: port + 1, envFiles, envFile: candidateEnv, readyTimeoutMs, log }),
+      startOne({ repo, ref: base, label: 'baseline', start, port: basePort, envFiles, envFile: baselineEnv, readyTimeoutMs, log }),
+      startOne({ repo, ref: head, label: 'candidate', start, port: candPort, envFiles, envFile: candidateEnv, readyTimeoutMs, log }),
     ]);
     if (b.status === 'fulfilled') apps.baseline = b.value;
     if (c.status === 'fulfilled') apps.candidate = c.value;

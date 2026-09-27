@@ -89,7 +89,7 @@ export async function recordFindings({ candidateUrl, baselineUrl, findings, outD
     for (const f of findings.slice(0, max)) {
       const base = `replay-${f.id}`;
       log(`recording ${f.id} (${f.repro.length} steps) on both versions`);
-      const isError = ['js-error', 'server-error', 'http-failure', 'dialog'].includes(f.type);
+      const isError = ['js-error', 'server-error', 'http-failure', 'dialog', 'arithmetic'].includes(f.type);
       const cand = await recordOne(browser, candidateUrl, cfg, f.repro, f.added ?? [], '#e03131', path.join(outDir, `${base}-after.webm`), isError ? `⚠ ${f.detail}` : null);
       const prev = baselineUrl
         ? await recordOne(browser, baselineUrl, cfg, f.repro, f.removed ?? [], '#f08c00', path.join(outDir, `${base}-before.webm`))

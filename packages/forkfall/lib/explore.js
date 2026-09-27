@@ -141,12 +141,41 @@ export async function settle(page, ms) {
   }
 }
 
+// Runs in the page: a rule-based check that needs no AI. For each row that has a quantity field
+// and a unit price ("$24.00 each"), some amount in that row should equal quantity × unit price.
+function arithmeticCheck() {
+  const money = (s) => [...s.matchAll(/[$€£]\s?(\d{1,3}(?:[,.]\d{3})*(?:[.,]\d{2}))/g)].map((m) => Number(m[1].replace(/[,.](?=\d{3}\b)/g, '').replace(',', '.')));
+  const problems = [];
+  for (const input of document.querySelectorAll('input')) {
+    const hint = `${input.type} ${input.name} ${input.id} ${input.getAttribute('aria-label') ?? ''}`.toLowerCase();
+    if (!(input.type === 'number' || /qty|quantity|cantidad/.test(hint)) || input.offsetParent === null || input.dataset.ffTyped) continue;
+    const qty = Number(input.value);
+    if (!Number.isFinite(qty) || qty < 2 || qty > 1000) continue;
+    let row = input.parentElement;
+    for (let d = 0; row && d < 6 && money(row.innerText).length < 2; d++) row = row.parentElement;
+    if (!row || money(row.innerText).length < 2) continue;
+    const unitMatch = row.innerText.match(/[$€£]\s?(\d+(?:[.,]\d{2}))\s*(?:each|\/\s*ea|c\/u|por unidad|x\b)/i);
+    if (!unitMatch) continue;
+    const unit = Number(unitMatch[1].replace(',', '.'));
+    const expected = Math.round(unit * qty * 100) / 100;
+    const amounts = money(row.innerText);
+    if (!amounts.some((a) => Math.abs(a - expected) < 0.01)) {
+      const label = input.getAttribute('aria-label') || input.name || 'quantity';
+      problems.push(`${label} is ${qty} at ${unitMatch[0].trim()}, but no amount on that row equals ${expected.toFixed(2)} (shows ${amounts.map((a) => a.toFixed(2)).join(', ')})`);
+    }
+  }
+  return problems;
+}
+
 export async function observe(page, events, since) {
   const url = new URL(page.url());
   let actions = [];
   let text = [];
   try {
     actions = await page.evaluate(enumerate);
+    for (const p of await page.evaluate(arithmeticCheck).catch(() => [])) {
+      if (!events.slice(since).some((e) => e.type === 'arithmetic' && e.message === p)) events.push({ type: 'arithmetic', message: p });
+    }
     // innerText misses what form fields contain, and many display bugs live there.
     text = maskText(await page.evaluate(() => {
       const fields = [...document.querySelectorAll('input, select, textarea')]
@@ -188,7 +217,11 @@ export async function perform(page, step, actions) {
   const el = (await page.evaluateHandle((i) => window.__ffEls[i], target.index)).asElement();
   if (!el) return 'missing';
   if (step.kind === 'click') await el.click({ timeout: 3000 });
-  else if (step.kind === 'fill') await el.fill(step.value, { timeout: 3000 });
+  else if (step.kind === 'fill') {
+    await el.fill(step.value, { timeout: 3000 });
+    // Typed but not yet applied: rule-based checks skip it until the page re-renders the field.
+    await el.evaluate((e) => { e.dataset.ffTyped = '1'; }).catch(() => {});
+  }
   else if (step.kind === 'select') await el.selectOption(step.value, { timeout: 3000 });
   return 'ok';
 }
@@ -336,7 +369,7 @@ function compare(cand, base, noise = new Set()) {
     for (const e of c.events ?? []) {
       const sig = `${e.type}:${e.message}`;
       const inBase = baseMsgs.has(sig);
-      const type = e.type === 'http' ? (e.status >= 500 ? 'server-error' : 'http-failure') : e.type === 'dialog' ? 'dialog' : 'js-error';
+      const type = e.type === 'http' ? (e.status >= 500 ? 'server-error' : 'http-failure') : e.type === 'dialog' ? 'dialog' : e.type === 'arithmetic' ? 'arithmetic' : 'js-error';
       findings.push({ type, step: i, route: c.route, detail: e.message, preexisting: inBase });
     }
     if (b && c.route !== b.route) {
@@ -352,7 +385,7 @@ function compare(cand, base, noise = new Set()) {
   return findings;
 }
 
-const SEVERITY = { 'js-error': 3, 'server-error': 3, 'http-failure': 2, dialog: 1, 'navigation-differs': 2, 'output-differs': 1, 'baseline-cannot-follow': 0 };
+const SEVERITY = { arithmetic: 3, 'js-error': 3, 'server-error': 3, 'http-failure': 2, dialog: 1, 'navigation-differs': 2, 'output-differs': 1, 'baseline-cannot-follow': 0 };
 
 export async function explore({ candidateUrl, baselineUrl, focusRoutes = [], startPaths = ['/'], scenarios = [], log = () => {}, ...opts }) {
   const cfg = { ...DEFAULTS, ...opts };
@@ -375,7 +408,8 @@ export async function explore({ candidateUrl, baselineUrl, focusRoutes = [], sta
 
   const record = (steps_, fs_, origin) => {
     for (const f of fs_) {
-      const sig = hash(`${f.type}|${f.route}|${f.type === 'output-differs' ? [...f.added, '/', ...f.removed].join('\n') : f.detail}`);
+      // Pre-existing and new occurrences of the same message stay separate findings.
+      const sig = hash(`${f.preexisting ? 'pre' : 'new'}|${f.type}|${f.route}|${f.type === 'output-differs' ? [...f.added, '/', ...f.removed].join('\n') : f.detail}`);
       const repro = steps_.slice(0, f.step + 1).map((s) => ({ ...s.action, text: describe(s.action) }));
       const existing = findings.get(sig);
       if (!existing) findings.set(sig, { id: `f-${sig}`, ...f, severity: f.preexisting ? 0 : SEVERITY[f.type], occurrences: 1, origin, repro, screen: steps_[f.step]?.text ?? [] });

@@ -1,0 +1,11 @@
+{
+  "name": "forkfall",
+  "owner": { "name": "Lautaro" },
+  "plugins": [
+    {
+      "name": "forkfall",
+      "source": "./",
+      "description": "Analyze the consequences of a code change in a web app: which screens it reaches, and which click paths now break or behave differently."
+    }
+  ]
+}

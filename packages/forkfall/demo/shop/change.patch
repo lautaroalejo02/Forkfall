@@ -1,0 +1,28 @@
+diff --git a/public/js/lib/quantity.js b/public/js/lib/quantity.js
+index c586f2d..56c127a 100644
+--- a/public/js/lib/quantity.js
++++ b/public/js/lib/quantity.js
+@@ -2,5 +2,10 @@ export function configureQuantity(input, quantity, product) {
+   input.min = '1';
+   input.max = String(product.stock);
+   input.step = '1';
+-  input.value = String(quantity);
++  const key = `shop-quantity-${product.id}`;
++  const saved = Number(sessionStorage.getItem(key));
++  input.value = String(Number.isInteger(saved) && saved >= 1 && saved <= product.stock ? saved : quantity);
++  input.addEventListener('change', () => {
++    if (input.validity.valid) sessionStorage.setItem(key, input.value);
++  });
+ }
+diff --git a/public/product.html b/public/product.html
+index 49dee81..18bc52e 100644
+--- a/public/product.html
++++ b/public/product.html
+@@ -10,6 +10,6 @@
+ </head>
+ <body>
+   <header><a class="brand" href="/">Little Shop</a><nav aria-label="Main navigation"><a href="/">Products</a><a href="/cart">Cart</a><a href="/orders">Order history</a></nav></header>
+-  <main><p><a href="/">← All products</a></p><section id="product" class="panel detail" aria-label="Product details"></section><p id="status" role="status" aria-live="polite"></p></main>
++  <main><p><a href="/">← All products</a></p><section id="product" class="panel detail" aria-label="Product details"></section><p class="muted">Your quantity selections are remembered during this browsing session.</p><p id="status" role="status" aria-live="polite"></p></main>
+ </body>
+ </html>

@@ -1,7 +1,6 @@
 // Project setup: forkfall.config.json, `init` (detect how to run the app, warn about unsafe
 // environments) and `doctor` (check everything needed before exploring).
 import fs from 'node:fs';
-import net from 'node:net';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
@@ -131,11 +130,6 @@ export function writeConfig(repo, d, { force = false } = {}) {
   return { file, written: true };
 }
 
-const portFree = (port) => new Promise((resolve) => {
-  const s = net.createServer().once('error', () => resolve(false)).once('listening', () => s.close(() => resolve(true)));
-  s.listen(port, '127.0.0.1');
-});
-
 export async function doctor(repo) {
   const checks = [];
   const add = (ok, what, fix) => checks.push({ ok, what, fix });
@@ -164,7 +158,6 @@ export async function doctor(repo) {
       add(false, `${CONFIG_FILE} is valid JSON`, e.message);
     }
   }
-  for (const p of [4610, 4611]) add(await portFree(p), `port ${p} free`, `Stop whatever is using port ${p}.`);
   const envs = [...(cfg.baselineEnv ? [cfg.baselineEnv] : []), ...(cfg.candidateEnv ? [cfg.candidateEnv] : [])];
   const scanned = envs.length ? envs : fs.readdirSync(repo).filter((f) => /^\.env(\..+)?$/.test(f) && !/example|sample|template/i.test(f));
   const warnings = scanEnv(repo, scanned);

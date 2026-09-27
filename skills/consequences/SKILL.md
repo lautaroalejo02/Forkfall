@@ -5,9 +5,22 @@ description: Analyze the consequences of a code change in a web app. Use when th
 
 # Forkfall: consequences of a change
 
-The CLI lives at `../../packages/forkfall/bin/forkfall.js` relative to this skill's base directory. Call it `FORKFALL` below and run it with `node`. It needs Node 22+ and, for exploration, Playwright's Chromium (`npx playwright install chromium` inside `packages/forkfall` if missing).
+The CLI lives at `../../packages/forkfall/bin/forkfall.js` relative to this skill's base directory. Call it `FORKFALL` below and run it with `node`. It needs Node 22+.
+
+First use: if `packages/forkfall/node_modules` is missing, run `npm install --omit=dev` there, then `npx playwright install chromium`. To show the user what the tool does before touching their project, run `node FORKFALL demo` (a bundled shop with a hidden cart bug; opens a side-by-side replay).
+
+Project setup, once per repo: `node FORKFALL init <repo>` writes `forkfall.config.json` (start command, reset endpoint, per-version env files) and warns about real databases and paid APIs. `node FORKFALL doctor <repo>` must pass before exploring; it fails if both copies would share a real database. Help the user fix what it reports; never work around a database warning without asking.
 
 ## 0. Starting from a plan (before any code exists)
+
+When the user has a plan or spec for a set of changes, turn it into an expected diff before anything is implemented, and check the implementation against it afterwards (anything that changed outside the plan is a failure):
+
+```json
+{ "changes": [ { "id": "shipping", "screens": ["/cart", "/checkout"], "description": "Orders under $50 show a $5.00 Shipping line; $50 or more ship free." } ],
+  "unchanged": ["/", "/product"] }
+```
+
+Write concrete descriptions with example values, list every screen each change should affect, and list the screens the plan says must not change. After implementation run `explore ... --expect expected.json`: the map opens with "Against the plan" (planned changes seen / not seen, and what changed without being in the plan). Report unexpected changes first.
 
 If the user gives a plan instead of a finished change, predict first and verify later:
 

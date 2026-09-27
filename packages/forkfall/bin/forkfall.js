@@ -12,6 +12,7 @@ import { loadConfig, detect, writeConfig, doctor, scanEnv } from '../lib/setup.j
 const USAGE = `forkfall — decide on behavior, not diffs
 
 Usage:
+  forkfall demo              try it: a bundled shop whose change hides a bug two screens away
   forkfall init     [repo]   detect how to run the app, write forkfall.config.json, warn about unsafe envs
   forkfall doctor   [repo]   check that everything needed is in place
   forkfall impact   <repo> [--base HEAD~1] [--head HEAD|WORKTREE] [--files a.ts,b.ts] [--out impact.json]
@@ -101,6 +102,20 @@ async function runExplore(repo, v) {
   return bad.length || exploration.plan?.unexpected.length ? 1 : 0;
 }
 
+async function runDemo(v) {
+  const { prepareDemo, openInBrowser } = await import('../lib/demo.js');
+  const { repo, options } = prepareDemo();
+  console.log(`demo: a small shop in ${repo}`);
+  console.log('The change "remember product quantity selections" touched a shared helper. Let\'s see what it did.\n');
+  const code = await runExplore(repo, { ...options, lang: v.lang ?? 'en' });
+  const exploration = JSON.parse(fs.readFileSync(path.join(options['out-dir'], 'exploration.json'), 'utf8'));
+  const top = exploration.findings.filter((f) => f.replay).sort((a, b) => replayRank(a) - replayRank(b))[0];
+  const target = top ? path.join(options['out-dir'], top.replay.page) : path.join(options['out-dir'], 'map.html');
+  if (!v['no-open']) openInBrowser(target);
+  console.log(`\nopened ${target}`);
+  return code;
+}
+
 function runInit(repo, v) {
   const d = detect(repo);
   const { file, written } = writeConfig(repo, d, { force: v.force });
@@ -188,13 +203,14 @@ async function main(argv) {
       sequences: { type: 'string' }, steps: { type: 'string' }, minutes: { type: 'string' }, seed: { type: 'string' },
       'env-file': { type: 'string', multiple: true }, lang: { type: 'string' }, 'out-dir': { type: 'string' },
       'candidate-url': { type: 'string' }, intent: { type: 'string' },
-      'baseline-env': { type: 'string' }, record: { type: 'string' }, expect: { type: 'string' }, force: { type: 'boolean' }, 'allow-shared-db': { type: 'boolean' },
+      'baseline-env': { type: 'string' }, record: { type: 'string' }, expect: { type: 'string' }, force: { type: 'boolean' }, 'no-open': { type: 'boolean' }, 'allow-shared-db': { type: 'boolean' },
       'candidate-env': { type: 'string' }, 'ready-minutes': { type: 'string' }, 'baseline-url': { type: 'string' }, check: { type: 'string' }, yes: { type: 'boolean' },
       by: { type: 'string' }, basis: { type: 'string' }, action: { type: 'string' }, note: { type: 'string' }, help: { type: 'boolean', short: 'h' },
     },
   });
   const [cmd, file, ...rest] = positionals;
   if (values.help || !cmd) { console.log(USAGE); return 0; }
+  if (cmd === 'demo') return runDemo(values);
   if (cmd === 'init') return runInit(file ?? '.', values);
   if (cmd === 'doctor') return runDoctor(file ?? '.');
   if (!file && cmd !== 'explore') { console.error(USAGE); return 2; }

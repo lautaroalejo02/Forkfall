@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Checkout · Little Shop</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/js/checkout.js"></script>
+</head>
+<body>
+  <header><a class="brand" href="/">Little Shop</a><nav aria-label="Main navigation"><a href="/">Products</a><a href="/cart">Cart</a><a href="/orders">Order history</a></nav></header>
+  <main><h1>Checkout</h1><p><a href="/cart">← Back to cart</a></p><section class="panel checkout"><h2>Delivery details</h2><p class="muted">Demo shop: no payment required. Shipping is included.</p><form id="checkout"><label for="name">Full name</label><input id="name" name="name" autocomplete="name" maxlength="300" required><label for="email">Email address</label><input id="email" name="email" type="email" autocomplete="email" maxlength="300" required><label for="address">Shipping address</label><input id="address" name="address" autocomplete="street-address" maxlength="300" required><div id="summary"></div><button id="place">Place order</button></form></section><p id="status" role="status" aria-live="polite"></p></main>
+</body>
+</html>

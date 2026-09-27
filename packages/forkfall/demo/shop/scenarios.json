@@ -1,0 +1,259 @@
+[
+ {
+  "name": "remembered quantity is added after sorting the catalog",
+  "start": "/product?id=mug",
+  "steps": [
+   {
+    "fill": "Quantity",
+    "value": "4"
+   },
+   {
+    "click": "← All products"
+   },
+   {
+    "select": "Sort products",
+    "value": "price"
+   },
+   {
+    "click": "View Everyday Mug"
+   },
+   {
+    "click": "Add to cart"
+   },
+   {
+    "click": "View cart"
+   }
+  ]
+ },
+ {
+  "name": "adding again with the remembered quantity exceeds stock",
+  "start": "/product?id=mug",
+  "steps": [
+   {
+    "fill": "Quantity",
+    "value": "10"
+   },
+   {
+    "click": "Add to cart"
+   },
+   {
+    "click": "Products"
+   },
+   {
+    "click": "View Everyday Mug"
+   },
+   {
+    "click": "Add to cart"
+   },
+   {
+    "click": "View cart"
+   }
+  ]
+ },
+ {
+  "name": "apply coupon then update the remembered cart quantity",
+  "start": "/product?id=mug",
+  "steps": [
+   {
+    "click": "Add to cart"
+   },
+   {
+    "click": "View cart"
+   },
+   {
+    "fill": "Quantity for Everyday Mug",
+    "value": "4"
+   },
+   {
+    "fill": "Coupon code",
+    "value": "SAVE10"
+   },
+   {
+    "click": "Apply coupon"
+   },
+   {
+    "click": "Update"
+   }
+  ]
+ },
+ {
+  "name": "editing the cart quantity changes the next add",
+  "start": "/product?id=tote",
+  "steps": [
+   {
+    "click": "Add to cart"
+   },
+   {
+    "click": "View cart"
+   },
+   {
+    "fill": "Quantity for Market Tote",
+    "value": "8"
+   },
+   {
+    "click": "Market Tote"
+   },
+   {
+    "click": "Add to cart"
+   },
+   {
+    "click": "View cart"
+   }
+  ]
+ },
+ {
+  "name": "zero quantity does not replace the remembered one",
+  "start": "/product?id=notebook",
+  "steps": [
+   {
+    "fill": "Quantity",
+    "value": "6"
+   },
+   {
+    "fill": "Quantity",
+    "value": "0"
+   },
+   {
+    "click": "← All products"
+   },
+   {
+    "click": "View Pocket Notebook"
+   },
+   {
+    "click": "Add to cart"
+   },
+   {
+    "click": "View cart"
+   }
+  ]
+ },
+ {
+  "name": "negative quantity does not survive a trip to order history",
+  "start": "/product?id=tote",
+  "steps": [
+   {
+    "fill": "Quantity",
+    "value": "3"
+   },
+   {
+    "fill": "Quantity",
+    "value": "-5"
+   },
+   {
+    "click": "Order history"
+   },
+   {
+    "goto": "/product?id=tote"
+   },
+   {
+    "click": "Add to cart"
+   },
+   {
+    "click": "View cart"
+   }
+  ]
+ },
+ {
+  "name": "empty quantity does not survive a trip to the cart",
+  "start": "/product?id=mug",
+  "steps": [
+   {
+    "fill": "Quantity",
+    "value": "2"
+   },
+   {
+    "fill": "Quantity",
+    "value": ""
+   },
+   {
+    "click": "Cart"
+   },
+   {
+    "goto": "/product?id=mug"
+   },
+   {
+    "click": "Add to cart"
+   },
+   {
+    "click": "View cart"
+   }
+  ]
+ },
+ {
+  "name": "very long quantity does not replace the remembered one",
+  "start": "/product?id=tote",
+  "steps": [
+   {
+    "fill": "Quantity",
+    "value": "2"
+   },
+   {
+    "fill": "Quantity",
+    "value": "12345678901234567890"
+   },
+   {
+    "click": "Products"
+   },
+   {
+    "click": "View Market Tote"
+   },
+   {
+    "click": "Add to cart"
+   },
+   {
+    "click": "View cart"
+   }
+  ]
+ },
+ {
+  "name": "mug and notebook quantities stay separate",
+  "start": "/product?id=mug",
+  "steps": [
+   {
+    "fill": "Quantity",
+    "value": "5"
+   },
+   {
+    "goto": "/product?id=notebook"
+   },
+   {
+    "fill": "Quantity",
+    "value": "2"
+   },
+   {
+    "goto": "/product?id=mug"
+   },
+   {
+    "click": "Add to cart"
+   },
+   {
+    "click": "View cart"
+   }
+  ]
+ },
+ {
+  "name": "place an order with the restored quantity",
+  "start": "/product?id=notebook",
+  "steps": [
+   {
+    "fill": "Quantity",
+    "value": "5"
+   },
+   {
+    "goto": "/product?id=notebook"
+   },
+   {
+    "click": "Add to cart"
+   },
+   {
+    "goto": "/checkout"
+   },
+   {
+    "fillAll": true
+   },
+   {
+    "click": "Place order"
+   }
+  ]
+ }
+]

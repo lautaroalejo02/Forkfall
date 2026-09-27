@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Little Shop · Little Shop</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/js/catalog.js"></script>
+</head>
+<body>
+  <header><a class="brand" href="/">Little Shop</a><nav aria-label="Main navigation"><a href="/">Products</a><a href="/cart">Cart</a><a href="/orders">Order history</a></nav></header>
+  <main><p class="eyebrow">Simple things, thoughtfully made</p><h1>Everyday essentials</h1><p class="muted">A small collection for your desk, kitchen, and daily adventures.</p><label for="sort">Sort products</label><select id="sort"><option value="featured">Featured</option><option value="price">Price: low to high</option></select><div id="products" class="grid"></div><p id="status" role="status" aria-live="polite"></p></main>
+</body>
+</html>
