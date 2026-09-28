@@ -6,11 +6,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { loadAnalysis } from '../../packages/forkfall/lib/analysis.js';
-import { deriveState } from '../../packages/forkfall/lib/state.js';
+import { loadAnalysis } from '../../../packages/forkfall/lib/analysis.js';
+import { deriveState } from '../../../packages/forkfall/lib/state.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const cli = path.resolve(here, '../../packages/forkfall/bin/forkfall.js');
+const cli = path.resolve(here, '../../../packages/forkfall/bin/forkfall.js');
 const analysis = path.join(here, 'analysis.json');
 const config = path.resolve(here, '../../examples/permissions-cache/src/config.js');
 const original = fs.readFileSync(config, 'utf8');

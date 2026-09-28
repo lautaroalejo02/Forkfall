@@ -12,7 +12,7 @@
   "scripts": {
     "test": "node --test"
   },
-  "license": "UNLICENSED",
+  "license": "MIT",
   "dependencies": {
     "playwright": "^1.62.1"
   },
@@ -28,6 +28,12 @@
     "bin",
     "lib",
     "demo",
-    "README.md"
-  ]
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lautaroalejo02/Forkfall.git",
+    "directory": "packages/forkfall"
+  }
 }
