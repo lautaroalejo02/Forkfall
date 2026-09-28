@@ -163,7 +163,8 @@ function printPlan(exploration) {
 }
 
 // Most interesting first: outside the plan, suspicious, confirmed errors, then the rest.
-const replayRank = (f) => (f.plan?.status === 'unexpected' ? 0 : f.judgment?.verdict === 'suspicious' ? 1 : f.severity >= 2 ? 2 : f.judgment?.verdict === 'unexplained' ? 3 : 4);
+// Wrong numbers on screen make a better story than a stack trace, so arithmetic ranks above other errors.
+const replayRank = (f) => (f.plan?.status === 'unexpected' ? 0 : f.judgment?.verdict === 'suspicious' ? 1 : f.type === 'arithmetic' ? 2 : f.severity >= 2 ? 3 : f.judgment?.verdict === 'unexplained' ? 4 : 5);
 
 async function recordRun({ exploration, impact, candidateUrl, baselineUrl, v, outDir }) {
   const max = Number(v.record ?? 3);
