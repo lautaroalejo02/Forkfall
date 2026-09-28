@@ -510,7 +510,7 @@ export async function explore({ candidateUrl, baselineUrl, focusRoutes = [], sta
     f.removed = f.removed.filter((l) => !shared.has(l));
     if (!f.added.length && !f.removed.length) findings.delete(sig);
   }
-  const list = [...findings.values()].sort((a, b) => b.severity - a.severity || a.repro.length - b.repro.length);
+  const list = [...findings.values()].sort((a, b) => b.severity - a.severity || (b.type === 'arithmetic') - (a.type === 'arithmetic') || a.repro.length - b.repro.length);
   return {
     kind: 'forkfall.exploration',
     candidateUrl, baselineUrl,
