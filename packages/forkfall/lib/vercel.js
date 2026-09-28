@@ -41,15 +41,31 @@ export function preflight(repo, { previewsIsolated = false } = {}) {
   const warnings = [];
   const notes = [];
 
+  // Marketplace databases (e.g. Neon from Vercel Storage) record, per connected project, which
+  // deployment actions run; a Preview action means each preview gets its own database branch,
+  // injected at deploy time (so it never shows in the project's env settings).
+  let stores = [];
+  try { stores = vercel(repo, ['api', '/v1/storage/stores']).stores ?? []; } catch { /* no storage access */ }
+  const connections = stores.flatMap((s) => (s.projectsMetadata ?? [])
+    .filter((c) => c.projectId === link.projectId)
+    .map((c) => ({ store: s.name, product: s.product?.name ?? s.type, vars: new Set(c.environmentVariables ?? []), actions: c.deployments?.actions ?? [] })));
+  const branchedVars = new Set(connections.filter((c) => c.actions.some((a) => JSON.stringify(a).toLowerCase().includes('preview'))).flatMap((c) => [...c.vars]));
+  for (const c of connections.filter((c) => c.actions.length)) notes.push(`${c.product} "${c.store}" runs deployment actions: ${JSON.stringify(c.actions).slice(0, 120)}`);
+
   const dbEntries = envs.filter((e) => DB_KEYS.test(e.key));
-  const shared = dbEntries.filter((e) => e.target?.includes('production') && e.target?.includes('preview'));
+  const sharedAll = dbEntries.filter((e) => e.target?.includes('production') && e.target?.includes('preview'));
+  const shared = sharedAll.filter((e) => !branchedVars.has(e.key));
+  if (sharedAll.length > shared.length) notes.push(`Previews get their own database branch (${connections.find((c) => c.actions.length)?.store}).`);
+  const owner = connections.find((c) => shared.some((e) => c.vars.has(e.key)));
   if (shared.length && previewsIsolated) {
     notes.push(`Production and Preview share ${shared[0].key} in settings; you confirmed previews get their own branch (--previews-isolated).`);
   } else if (shared.length) {
     problems.push({
       what: 'Preview deployments use your production database',
       detail: `${shared.map((e) => e.key).slice(0, 3).join(', ')}${shared.length > 3 ? ` and ${shared.length - 3} more` : ''} ${shared.length === 1 ? 'is' : 'are'} set for Production and Preview together. Exploring a preview would click buttons and write real data.`,
-      fix: 'Give each preview its own database branch. Neon from Vercel Storage: Storage → your database → connect/manage the project → Advanced Options → Deployments Configuration → turn on Preview and "Resource must be active before deployment". Branch variables are then injected per deployment and do not show in project settings, so this check cannot see them: after enabling it, run again with --previews-isolated.',
+      fix: owner
+        ? `Turn on preview branching for this connection: Vercel → Storage → ${owner.store} → Connect Project → ${link.projectName} → Advanced Options → Deployments Configuration → enable Preview. Do not disconnect the project (that removes the variables from Production).`
+        : 'Give each preview its own database branch. Neon from Vercel Storage: Storage → your database → connect/manage the project → Advanced Options → Deployments Configuration → turn on Preview and "Resource must be active before deployment". Branch variables are then injected per deployment and do not show in project settings, so this check cannot see them: after enabling it, run again with --previews-isolated.',
     });
   }
   const previewDb = dbEntries.filter((e) => e.target?.includes('preview') && !e.target?.includes('production'));
