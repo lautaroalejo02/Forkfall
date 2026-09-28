@@ -277,14 +277,15 @@ export async function reset(url, cfg) {
   if (!cfg.resetPath.startsWith('/')) {
     throw new Error(`--reset-path must start with "/" (got "${cfg.resetPath}"). In Git Bash, set MSYS_NO_PATHCONV=1 so "/path" arguments aren't rewritten.`);
   }
-  const res = await fetch(new URL(cfg.resetPath, url), { method: 'POST' });
+  const res = await fetch(new URL(cfg.resetPath, url), { method: 'POST', headers: cfg.headers ?? {} });
   if (!res.ok) throw new Error(`reset ${cfg.resetPath} → HTTP ${res.status}`);
 }
 
 // Runs a sequence. With `plan` it replays; otherwise it generates actions as it goes.
 async function runSequence(browser, url, cfg, { start, plan, scenario, rand, stats, focusRoutes, seen = { states: 0, keys: new Map(), routes: new Set() } }) {
   await reset(url, cfg);
-  const { context, page, events } = await openSession(browser, url);
+  // cfg.headers: e.g. a Vercel protection-bypass header for protected preview deployments.
+  const { context, page, events } = await openSession(browser, url, cfg.headers ? { extraHTTPHeaders: cfg.headers } : {});
   const steps = [];
   try {
     let since = 0;

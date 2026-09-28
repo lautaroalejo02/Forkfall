@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
+import { spawnSync } from 'node:child_process';
 import { loadAnalysis, AnalysisError } from '../lib/analysis.js';
 import { captureCheck, deriveState, recordDecision, ACTIONS } from '../lib/state.js';
 import { renderReport } from '../lib/report.js';
@@ -12,6 +13,9 @@ import { loadConfig, detect, writeConfig, doctor, scanEnv } from '../lib/setup.j
 const USAGE = `forkfall — decide on behavior, not diffs
 
 Usage:
+  forkfall vercel   [repo] [--base main] [--candidate-url URL] [--baseline-url URL] [--head <commit>]
+                    [--preflight] [--no-deploy] [--previews-isolated]
+                    compare this branch's Vercel preview with a preview of its base commit
   forkfall demo              try it: a bundled shop whose change hides a bug two screens away
   forkfall init     [repo]   detect how to run the app, write forkfall.config.json, warn about unsafe envs
   forkfall doctor   [repo]   check that everything needed is in place
@@ -78,7 +82,7 @@ async function runExplore(repo, v) {
       focusRoutes: pages.map((e) => e.route),
       startPaths: [...new Set(['/', ...pages.filter((e) => !/\[|:/.test(e.route)).map((e) => e.route)])],
       scenarios: v.scenarios ? JSON.parse(fs.readFileSync(v.scenarios, 'utf8')) : [],
-      resetPath: v['reset-path'],
+      resetPath: v['reset-path'], headers: v.headers,
       sequences: Number(v.sequences ?? 40), maxSteps: Number(v.steps ?? 8),
       timeMs: Number(v.minutes ?? 5) * 60_000, seed: Number(v.seed ?? 1), calibrateEnv: !!v['calibrate-env'],
       log: (m) => console.log(m),
@@ -102,6 +106,27 @@ async function runExplore(repo, v) {
   if (top) console.log(`replay: ${path.join(outDir, top.replay.page)}`);
   console.log(`map: ${mapFile}`);
   return bad.length || exploration.plan?.unexpected.length ? 1 : 0;
+}
+
+async function runVercel(repo, v) {
+  const { preflight, resolveDeployments } = await import('../lib/vercel.js');
+  const pf = preflight(repo, { previewsIsolated: !!v['previews-isolated'] });
+  console.log(`Vercel project: ${pf.project.name}${pf.project.framework ? ` (${pf.project.framework})` : ''}${pf.project.repo ? ` · ${pf.project.repo}` : ''}`);
+  for (const n of pf.notes) console.log(`  ok    ${n}`);
+  for (const w of pf.warnings) console.log(`  warn  ${w}`);
+  for (const p of pf.problems) console.log(`  STOP  ${p.what}\n        ${p.detail}\n        Fix: ${p.fix}`);
+  if (!pf.problems.length) console.log(`  ok    previews can be explored safely${pf.headers ? ' (using the automation bypass)' : ''}`);
+  if (v.preflight) return pf.problems.length ? 1 : 0;
+  if (pf.problems.length) { console.log('\nNothing was explored. Fix the items above and run again.'); return 2; }
+
+  const d = resolveDeployments(repo, pf.link, { base: v.base ?? 'main', head: v.head, candidateUrl: v['candidate-url'], baselineUrl: v['baseline-url'], deploy: !v['no-deploy'], log: (m) => console.log(m) });
+  console.log(`\ncomparing\n  before  ${d.baseline.url}  (${d.baseSha?.slice(0, 7)})\n  after   ${d.candidate.url}  (${d.branch}${d.candidate.sha ? ` @ ${d.candidate.sha.slice(0, 7)}` : ''})\n`);
+  spawnSync('git', ['fetch', '--quiet', 'origin'], { cwd: repo });
+  return runExplore(repo, {
+    ...loadConfig(repo), ...v,
+    base: d.baseSha, head: d.candidate.sha ?? 'HEAD',
+    'candidate-url': d.candidate.url, 'baseline-url': d.baseline.url, headers: pf.headers ?? undefined,
+  });
 }
 
 async function runDemo(v) {
@@ -176,7 +201,7 @@ async function recordRun({ exploration, impact, candidateUrl, baselineUrl, v, ou
   const { renderReplay } = await import('../lib/replay.js');
   const { typeLabel } = await import('../lib/map.js');
   const lang = v.lang ?? 'en';
-  const done = await recordFindings({ candidateUrl, baselineUrl, findings: chosen, outDir, max, resetPath: v['reset-path'], log: (m) => console.log(m) });
+  const done = await recordFindings({ candidateUrl, baselineUrl, findings: chosen, outDir, max, resetPath: v['reset-path'], headers: v.headers, log: (m) => console.log(m) });
   for (const f of done) fs.writeFileSync(path.join(outDir, f.replay.page), renderReplay({ finding: f, impact, lang, typeLabel: typeLabel(f.type, lang) }));
 }
 
@@ -206,7 +231,7 @@ async function main(argv) {
       sequences: { type: 'string' }, steps: { type: 'string' }, minutes: { type: 'string' }, seed: { type: 'string' },
       'env-file': { type: 'string', multiple: true }, lang: { type: 'string' }, 'out-dir': { type: 'string' },
       'candidate-url': { type: 'string' }, intent: { type: 'string' },
-      'baseline-env': { type: 'string' }, record: { type: 'string' }, expect: { type: 'string' }, force: { type: 'boolean' }, 'calibrate-env': { type: 'boolean' }, 'no-open': { type: 'boolean' }, 'allow-shared-db': { type: 'boolean' },
+      'baseline-env': { type: 'string' }, record: { type: 'string' }, expect: { type: 'string' }, force: { type: 'boolean' }, 'no-deploy': { type: 'boolean' }, preflight: { type: 'boolean' }, 'previews-isolated': { type: 'boolean' }, 'calibrate-env': { type: 'boolean' }, 'no-open': { type: 'boolean' }, 'allow-shared-db': { type: 'boolean' },
       'candidate-env': { type: 'string' }, 'ready-minutes': { type: 'string' }, 'baseline-url': { type: 'string' }, check: { type: 'string' }, yes: { type: 'boolean' },
       by: { type: 'string' }, basis: { type: 'string' }, action: { type: 'string' }, note: { type: 'string' }, help: { type: 'boolean', short: 'h' },
     },
@@ -214,6 +239,7 @@ async function main(argv) {
   const [cmd, file, ...rest] = positionals;
   if (values.help || !cmd) { console.log(USAGE); return 0; }
   if (cmd === 'demo') return runDemo(values);
+  if (cmd === 'vercel') return runVercel(file ?? '.', values);
   if (cmd === 'init') return runInit(file ?? '.', values);
   if (cmd === 'doctor') return runDoctor(file ?? '.');
   if (!file && cmd !== 'explore') { console.error(USAGE); return 2; }

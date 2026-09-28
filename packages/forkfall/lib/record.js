@@ -45,7 +45,7 @@ function banner({ text, color }) {
 async function recordOne(browser, url, cfg, repro, lines, color, file, note) {
   await reset(url, cfg);
   const dir = path.dirname(file);
-  const { context, page, events } = await openSession(browser, url, { viewport: VIEWPORT, recordVideo: { dir, size: VIEWPORT } });
+  const { context, page, events } = await openSession(browser, url, { viewport: VIEWPORT, recordVideo: { dir, size: VIEWPORT }, ...(cfg.headers ? { extraHTTPHeaders: cfg.headers } : {}) });
   const t0 = Date.now();
   const timeline = [];
   let highlighted = 0;
