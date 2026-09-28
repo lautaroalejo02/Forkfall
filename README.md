@@ -2,6 +2,8 @@
 
 **See what your change breaks two screens away.**
 
+![Side by side: the previous version shows quantity 2 and $48; the new version shows quantity 8 and $24](https://raw.githubusercontent.com/lautaroalejo02/Forkfall/main/docs/replay.gif)
+
 Forkfall runs the old and the new version of your web app side by side, clicks through both the same way, and shows what changed: errors, failed requests, screens that now show something different, and, when you started from a plan, everything that changed **without being in the plan**. Every finding comes with the steps to reproduce it and a side-by-side replay.
 
 ```sh

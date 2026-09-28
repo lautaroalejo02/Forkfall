@@ -2,6 +2,8 @@
 
 **See what your change breaks two screens away.**
 
+![Side by side: the previous version shows quantity 2 and $48; the new version shows quantity 8 and $24](https://raw.githubusercontent.com/lautaroalejo02/Forkfall/main/docs/replay.gif)
+
 Forkfall runs the old and the new version of your web app side by side, clicks through both the same way, and shows you what changed: errors, failed requests, and screens that now show something different. Each finding comes with the exact steps to reproduce it and a side-by-side replay.
 
 It is built for changes written by coding agents: the agent says what it changed, Forkfall checks what actually changed.
